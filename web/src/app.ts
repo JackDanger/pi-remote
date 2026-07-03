@@ -659,7 +659,8 @@ async function sendPrompt(): Promise<void> {
       ...images.map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType })),
     ],
   };
-  appendNode(messageNode(optimistic, -1), { optimistic: true });
+  const optimisticNode = messageNode(optimistic, -1);
+  appendNode(optimisticNode, { optimistic: true });
   scrollLogToBottom(true);
   try {
     await rpc.request(type, {
@@ -668,6 +669,13 @@ async function sendPrompt(): Promise<void> {
       ...(images.length ? { images } : {}),
     });
   } catch (error) {
+    optimisticNode?.remove();
+    const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+    if (input && !input.value) input.value = text;
+    if (chat && chat.attachments.length === 0 && images.length) {
+      chat.attachments = images;
+      renderAttachStrip();
+    }
     toast(String((error as Error).message));
   }
 }
