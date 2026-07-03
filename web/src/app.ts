@@ -652,6 +652,7 @@ async function sendPrompt(): Promise<void> {
   updateSendEnabled();
 
   const type = chat.streaming ? (chat.deliverMode === "followup" ? "session.followup" : "session.steer") : "session.prompt";
+  const freshRun = type === "session.prompt";
   const optimistic: ChatMessage = {
     role: "user",
     content: [
@@ -661,6 +662,7 @@ async function sendPrompt(): Promise<void> {
   };
   const optimisticNode = messageNode(optimistic, -1);
   appendNode(optimisticNode, { optimistic: true });
+  if (freshRun) statusRow("awaiting", "Waiting for the model — the first message can take a while if the model has to load.");
   scrollLogToBottom(true);
   try {
     await rpc.request(type, {
@@ -670,6 +672,7 @@ async function sendPrompt(): Promise<void> {
     });
   } catch (error) {
     optimisticNode?.remove();
+    if (freshRun) removeStatusRow("awaiting");
     const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
     if (input && !input.value) input.value = text;
     if (chat && chat.attachments.length === 0 && images.length) {
@@ -995,6 +998,7 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
     case "agent_start":
       chat.streaming = true;
       removeStatusRow("retry");
+      removeStatusRow("awaiting");
       updateStreamingUi();
       break;
     case "agent_end": {
