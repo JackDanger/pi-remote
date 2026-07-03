@@ -1,0 +1,40 @@
+{
+  "name": "pi-remote",
+  "version": "0.1.0",
+  "description": "Persistent server hosting many concurrent Pi coding-agent sessions, with a mobile-first browser frontend over WebSocket",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JackDanger/pi-remote.git"
+  },
+  "bin": {
+    "pi-remote": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "web/dist",
+    "web/index.html",
+    "deploy"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.web.json && node scripts/build-web.mjs",
+    "start": "node dist/main.js",
+    "dev": "npm run build && node dist/main.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}
