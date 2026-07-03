@@ -9,6 +9,8 @@ User=%i
 ExecStart=/usr/bin/node /opt/pi-remote/dist/main.js
 Restart=on-failure
 RestartSec=3
+# TimeoutStopSec must be >= the drain grace (PI_REMOTE_SHUTDOWN_GRACE_MS, default 120s) plus a margin, or systemd SIGKILLs mid-drain.
+TimeoutStopSec=150
 Environment=PI_REMOTE_HOST=127.0.0.1
 Environment=PI_REMOTE_PORT=3141
 Environment=PI_REMOTE_WORKSPACE_ROOT=/home/%i/pi-workspaces

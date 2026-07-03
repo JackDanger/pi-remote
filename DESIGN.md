@@ -147,6 +147,36 @@ The keyboard is handled with the VisualViewport API: `#app` is resized to
 `visualViewport.height` and translated by `offsetTop` on every viewport change, so the
 composer stays pinned above the on-screen keyboard while only the message log scrolls.
 
+## Graceful shutdown (drain)
+
+A hosted turn can be a slow, expensive completion; killing it on every redeploy is not
+acceptable. On `SIGTERM`/`SIGINT`, `main.ts` calls `server.close()` (stops the listener
+— no new HTTP/WS connections; established sockets, including upgraded WebSockets, are
+untouched) and `SessionHost.drain(graceMs)`:
+
+- **Reject new work, keep serving old.** From drain start, `sessions.create`,
+  `sessions.resume`, `session.prompt`, `session.steer`, and `session.followup` throw
+  `ServerDrainingError` ("server is shutting down"), which reaches WS clients as a
+  normal `{ ok: false, error }` reply. Everything read-only or winding-down stays
+  available — `attach`, `list`, `abort`, event fan-out — so clients already watching a
+  running turn see it stream to completion.
+- **Drain = "currently-running turns finish."** `drain` snapshots the sessions with
+  `isStreaming` true at drain start and polls until each has been observed idle once
+  (or the deadline hits). The snapshot-and-observe-once rule makes drain deterministic:
+  a session that starts streaming *after* drain begins, or restarts because a
+  pre-drain queued steer/followup kicked off a new turn, does **not** extend the
+  drain — queued turns are sacrificed (the session's JSONL keeps everything up to the
+  end of the finished turn; resume after restart continues from there).
+- **Hard deadline.** Sessions still streaming at `shutdownGraceMs` are returned as
+  `forced`; `main.ts` logs their ids, disposes everything, and exits. A second signal
+  skips the drain and exits immediately.
+- `/healthz` reports `{ ok, liveSessions, draining }` so an operator or LB can
+  distinguish "draining" from "up" on kept-alive connections.
+
+The systemd unit must outlast the drain: `TimeoutStopSec` (150 in
+`deploy/pi-remote.service`) has to exceed the grace period, or systemd's SIGKILL
+defeats the whole mechanism.
+
 ## Security / trust boundary
 
 **The server performs no authentication and no sandboxing.** A connected client can run
@@ -172,6 +202,7 @@ Precedence: env > config file > defaults. Config file: `~/.config/pi-remote/conf
 | `PI_REMOTE_WORKSPACE_ROOT` | `workspaceRoot` | `~/pi-workspaces` | where new session workspaces are created/resolved |
 | `PI_REMOTE_AGENT_DIR` | `agentDir` | Pi's own (`~/.pi/agent`) | Pi config dir: auth, models, settings, sessions, extensions, skills |
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings → first available | `provider/model-id` for new sessions |
+| `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | drain deadline: how long SIGTERM waits for running turns before force-stopping |
 
 Provider credentials are Pi's problem, deliberately: `auth.json`, env vars
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …), `models.json`, or provider-registering
@@ -182,6 +213,7 @@ extensions — whatever the host's `pi` already uses, pi-remote inherits.
 Unit tests (vitest) cover the pure seams: config precedence and model-string parsing,
 protocol request validation, and SessionHost lifecycle/fan-out against a fake session
 factory (attach/detach bookkeeping, multi-client event fan-out, prompt-vs-steer
-routing). The end-to-end path (real model, real tool calls, real WS) is exercised by
+routing, and drain semantics: immediate resolve when idle, waiting on streaming
+sessions, new-work rejection, forced timeout, and the observe-once queued-turn rule). The end-to-end path (real model, real tool calls, real WS) is exercised by
 `spike/concurrent-sessions.mjs` and a live checklist in the README, since it requires a
 configured provider.

@@ -102,6 +102,7 @@ Environment variables override the config file
 | `PI_REMOTE_WORKSPACE_ROOT` | `workspaceRoot` | `~/pi-workspaces` | where new session workspaces are created; relative workspace names resolve under it |
 | `PI_REMOTE_AGENT_DIR` | `agentDir` | `~/.pi/agent` | Pi config dir (auth.json, models.json, settings.json, sessions/, extensions/, skills/) |
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings default, else first available | `provider/model-id` for new sessions |
+| `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | on SIGTERM/SIGINT, how long to wait for in-flight agent turns to finish before force-stopping them |
 
 Example `config.json`:
 
@@ -136,6 +137,22 @@ sudo systemctl enable --now pi-remote
 
 Put provider API keys in `~/.config/pi-remote/env` (referenced via `EnvironmentFile=`)
 rather than in the unit file.
+
+### Graceful restarts
+
+On `SIGTERM`/`SIGINT` (what `systemctl restart`/`stop` sends) pi-remote drains instead
+of dying: it immediately stops accepting new connections and new work
+(`sessions.create`/`prompt`/`steer`/`followup` get a "server is shutting down" error),
+waits for every in-flight agent turn to finish — clients already attached keep
+receiving events through the end of their turn — then exits. If a turn is still
+running after `PI_REMOTE_SHUTDOWN_GRACE_MS` (default 2 minutes) it is force-stopped
+and the session id logged; sessions persist as JSONL either way and are resumable
+after restart. A second signal forces immediate exit.
+
+The unit ships with `TimeoutStopSec=150`; keep it **greater than the grace period**
+(grace + margin), otherwise systemd SIGKILLs the process mid-drain and running turns
+are lost anyway. If you raise `PI_REMOTE_SHUTDOWN_GRACE_MS`, raise `TimeoutStopSec`
+to match.
 
 ### Reverse proxy
 
