@@ -540,6 +540,7 @@ function openSessionSheet(): void {
 function buildComposer(): void {
   ui.footer.hidden = false;
   ui.footer.innerHTML = `
+    <div class="working-row" id="working-row" hidden><span class="work-spin"></span><span id="working-label">Working…</span></div>
     <div class="queue-note" id="queue-note" hidden></div>
     <div class="attach-strip" id="attach-strip" hidden></div>
     <div class="deliver-row" id="deliver-row" hidden>
@@ -708,6 +709,8 @@ function updateStreamingUi(): void {
   }
   const badgeTarget = document.getElementById("chat-title");
   badgeTarget?.classList.toggle("streaming", chat.streaming);
+  const workingRow = document.getElementById("working-row");
+  if (workingRow) workingRow.hidden = !chat.streaming;
 }
 
 function onLogScroll(): void {
