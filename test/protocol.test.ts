@@ -24,6 +24,10 @@ describe("parseClientRequest", () => {
     expect(() => parseClientRequest(JSON.stringify({ id: 1, type: "bogus" }))).toThrow(/Unknown request type/);
   });
 
+  it("accepts ping", () => {
+    expect(parseClientRequest(JSON.stringify({ id: 9, type: "ping" }))).toEqual({ id: 9, type: "ping" });
+  });
+
   it("accepts session.rename", () => {
     expect(
       parseClientRequest(JSON.stringify({ id: 3, type: "session.rename", sessionId: "s", name: "n" })),

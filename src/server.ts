@@ -22,6 +22,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".map": "application/json",
+  ".webmanifest": "application/manifest+json",
 };
 
 function serveStatic(webRoot: string, req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -94,6 +95,8 @@ async function dispatch(
     }
     case "models.list":
       return { models: options.listModels() };
+    case "ping":
+      return {};
   }
 }
 

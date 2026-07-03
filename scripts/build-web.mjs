@@ -20,3 +20,5 @@ await esbuild.build({
 
 fs.copyFileSync(path.join(root, "web", "src", "styles.css"), path.join(outDir, "app.css"));
 fs.copyFileSync(path.join(root, "web", "index.html"), path.join(outDir, "index.html"));
+fs.copyFileSync(path.join(root, "web", "manifest.webmanifest"), path.join(outDir, "manifest.webmanifest"));
+fs.cpSync(path.join(root, "web", "icons"), path.join(outDir, "icons"), { recursive: true });

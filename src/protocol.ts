@@ -17,7 +17,8 @@ export type ClientRequest =
   | { id: number; type: "session.set_model"; sessionId: string; provider: string; modelId: string }
   | { id: number; type: "session.set_thinking"; sessionId: string; level: string }
   | { id: number; type: "session.rename"; sessionId: string; name: string }
-  | { id: number; type: "models.list" };
+  | { id: number; type: "models.list" }
+  | { id: number; type: "ping" };
 
 export type RequestType = ClientRequest["type"];
 
@@ -36,6 +37,7 @@ const REQUIRED_STRING_FIELDS: Record<RequestType, readonly string[]> = {
   "session.set_thinking": ["sessionId", "level"],
   "session.rename": ["sessionId", "name"],
   "models.list": [],
+  ping: [],
 };
 
 const IMAGE_CAPABLE_TYPES = new Set<RequestType>(["session.prompt", "session.steer", "session.followup"]);
