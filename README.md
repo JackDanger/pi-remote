@@ -74,6 +74,22 @@ hosted session behaves like a local `pi` run in that workspace:
 - multiple viewers: attach the same session from several devices at once; every
   client receives the same event stream
 
+## The web app
+
+The bundled frontend is built for one-handed phone use (iOS Safari first):
+
+- installable as a home-screen PWA (standalone display, safe-area aware, keyboard
+  avoidance via the VisualViewport API)
+- streamed markdown rendering — code blocks with copy buttons, lists, tables — plus
+  collapsible thinking blocks and tool calls as expandable cards (args, live output,
+  colored diffs, "show all" for long results)
+- photo/camera attachments, downscaled client-side and sent with the prompt
+- stop / steer-now / queue-after-done controls while the agent runs
+- session rename, model picker, and thinking level in a per-session sheet
+- aggressive reconnect: exponential backoff, instant retry on foregrounding, and
+  automatic session re-resume after a server restart — a dropped connection mid-run
+  recovers to the live stream
+
 ## Configuration
 
 Environment variables override the config file
@@ -137,7 +153,12 @@ One WebSocket at `/ws`. Client sends `{ id, type, ...params }`, server answers
 `sessions.list` · `sessions.create` · `sessions.resume` · `sessions.delete` ·
 `session.attach` · `session.detach` · `session.prompt` · `session.steer` ·
 `session.followup` · `session.abort` · `session.set_model` · `session.set_thinking` ·
-`models.list`
+`session.rename` · `models.list` · `ping`
+
+`session.prompt`/`steer`/`followup` accept an optional
+`images: [{ data, mimeType }]` array (base64, `image/*`, max 8 per message) for
+photo attachments; `sessions_changed` is broadcast to every client when a session
+is created, deleted, or renamed.
 
 Any WebSocket client can drive it — the bundled web app is just one consumer. See
 [DESIGN.md](DESIGN.md) for the architecture and the decisions behind it.

@@ -110,18 +110,42 @@ has.
 
 Single JSON message per WS frame. Client requests carry an `id`; the server replies
 with `{ id, ok, result | error }`. Server pushes are unsolicited:
-`{ type: "session_event", sessionId, event }` (raw `AgentSessionEvent`, untranslated)
-and `{ type: "sessions_changed" }`.
+`{ type: "session_event", sessionId, event }` (raw `AgentSessionEvent`, untranslated),
+`{ type: "session_error", sessionId, error }`, and `{ type: "sessions_changed" }`
+(broadcast to every connected client on create/delete/rename).
 
 Requests: `sessions.list`, `sessions.create`, `sessions.resume`, `sessions.delete`,
 `session.attach` (returns full serialized state: messages, model, thinking level,
 streaming flag), `session.detach`, `session.prompt`, `session.steer`,
 `session.followup`, `session.abort`, `session.set_model`, `session.set_thinking`,
-`models.list`.
+`session.rename`, `models.list`, `ping`.
+
+`session.prompt` / `session.steer` / `session.followup` take an optional
+`images: [{ data, mimeType }]` array (base64, max 8 per message, `image/*` only);
+the server converts these to Pi `ImageContent` blocks, and `text` may be empty when
+images are present. `ping` exists so mobile clients can keep otherwise-idle
+connections alive through reverse-proxy read timeouts.
 
 Forwarding raw Pi events (rather than translating to a bespoke schema) keeps the server
 thin and means new Pi event types flow through without server changes; the frontend
 ignores types it doesn't know.
+
+### Frontend resilience model (iOS Safari)
+
+The client assumes the connection is unreliable: Safari suspends WebSockets when the
+tab or PWA is backgrounded, and mobile networks drop mid-run. The `Rpc` layer
+reconnects with exponential backoff (500ms → 8s), retries immediately on
+`visibilitychange`/`pageshow`/`online`, times out stuck requests, and pings every 25s.
+On reconnect the client re-attaches to the open session and reconciles state from
+`session.attach`; if the attach fails because the server itself restarted (live session
+gone), it resumes the session by path and re-attaches — a phone user never loses their
+place in a conversation. After `agent_end` the client resyncs but keeps its local
+not-streaming state, because `session.attach` served immediately after the end event
+can still report `isStreaming: true` (Pi keeps it true until end listeners settle).
+
+The keyboard is handled with the VisualViewport API: `#app` is resized to
+`visualViewport.height` and translated by `offsetTop` on every viewport change, so the
+composer stays pinned above the on-screen keyboard while only the message log scrolls.
 
 ## Security / trust boundary
 
