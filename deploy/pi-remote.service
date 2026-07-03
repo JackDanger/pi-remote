@@ -1,0 +1,19 @@
+[Unit]
+Description=pi-remote — server-hosted Pi coding-agent sessions with a web frontend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/node /opt/pi-remote/dist/main.js
+Restart=on-failure
+RestartSec=3
+Environment=PI_REMOTE_HOST=127.0.0.1
+Environment=PI_REMOTE_PORT=3141
+Environment=PI_REMOTE_WORKSPACE_ROOT=%h/pi-workspaces
+EnvironmentFile=-%h/.config/pi-remote/env
+WorkingDirectory=/opt/pi-remote
+
+[Install]
+WantedBy=multi-user.target
