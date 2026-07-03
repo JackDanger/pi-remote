@@ -4,6 +4,13 @@ export interface ModelSnapshot {
   name?: string;
 }
 
+/** Matches Pi's ImageContent shape structurally, without importing the SDK here. */
+export interface ImageContent {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
 /** The slice of Pi's AgentSession that SessionHost drives; AgentSession satisfies it structurally. */
 export interface HostableSession {
   sessionId: string;
@@ -14,11 +21,12 @@ export interface HostableSession {
   isStreaming: boolean;
   messages: unknown[];
   subscribe(listener: (event: unknown) => void): () => void;
-  prompt(text: string): Promise<void>;
-  steer(text: string): Promise<void>;
-  followUp(text: string): Promise<void>;
+  prompt(text: string, options?: { images?: ImageContent[] }): Promise<void>;
+  steer(text: string, images?: ImageContent[]): Promise<void>;
+  followUp(text: string, images?: ImageContent[]): Promise<void>;
   abort(): Promise<void>;
   setThinkingLevel(level: never): void;
+  setSessionName(name: string): void;
   dispose(): void;
 }
 
@@ -162,20 +170,22 @@ export class SessionHost {
     }
   }
 
-  prompt(sessionId: string, text: string): void {
+  prompt(sessionId: string, text: string, images?: ImageContent[]): void {
     const entry = this.mustGetLive(sessionId);
-    const run = entry.session.isStreaming ? entry.session.steer(text) : entry.session.prompt(text);
+    const run = entry.session.isStreaming
+      ? entry.session.steer(text, images)
+      : entry.session.prompt(text, images?.length ? { images } : undefined);
     run.catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
-  steer(sessionId: string, text: string): void {
+  steer(sessionId: string, text: string, images?: ImageContent[]): void {
     const entry = this.mustGetLive(sessionId);
-    entry.session.steer(text).catch((error: unknown) => this.broadcastError(sessionId, error));
+    entry.session.steer(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
-  followUp(sessionId: string, text: string): void {
+  followUp(sessionId: string, text: string, images?: ImageContent[]): void {
     const entry = this.mustGetLive(sessionId);
-    entry.session.followUp(text).catch((error: unknown) => this.broadcastError(sessionId, error));
+    entry.session.followUp(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -192,6 +202,12 @@ export class SessionHost {
     const entry = this.mustGetLive(sessionId);
     entry.session.setThinkingLevel(level as never);
     return entry.session.thinkingLevel;
+  }
+
+  rename(sessionId: string, name: string): string {
+    const entry = this.mustGetLive(sessionId);
+    entry.session.setSessionName(name);
+    return entry.session.sessionName ?? name;
   }
 
   liveSessionIds(): string[] {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type HostableSession,
+  type ImageContent,
   type PersistedSessionInfo,
   SessionHost,
   SessionNotFoundError,
@@ -16,7 +17,9 @@ class FakeSession implements HostableSession {
   messages: unknown[] = [];
   disposed = false;
   prompts: string[] = [];
+  promptImages: ImageContent[][] = [];
   steers: string[] = [];
+  steerImages: ImageContent[][] = [];
   followUps: string[] = [];
   aborted = 0;
   private listeners = new Set<(event: unknown) => void>();
@@ -35,12 +38,14 @@ class FakeSession implements HostableSession {
     for (const l of this.listeners) l(event);
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, options?: { images?: ImageContent[] }): Promise<void> {
     this.prompts.push(text);
+    this.promptImages.push(options?.images ?? []);
   }
 
-  async steer(text: string): Promise<void> {
+  async steer(text: string, images?: ImageContent[]): Promise<void> {
     this.steers.push(text);
+    this.steerImages.push(images ?? []);
   }
 
   async followUp(text: string): Promise<void> {
@@ -53,6 +58,10 @@ class FakeSession implements HostableSession {
 
   setThinkingLevel(level: never): void {
     this.thinkingLevel = level;
+  }
+
+  setSessionName(name: string): void {
+    this.sessionName = name;
   }
 
   dispose(): void {
@@ -121,6 +130,29 @@ describe("SessionHost", () => {
 
     expect(fake.prompts).toEqual(["first"]);
     expect(fake.steers).toEqual(["second"]);
+  });
+
+  it("passes image attachments through prompt and steer", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    const images: ImageContent[] = [{ type: "image", data: "aGk=", mimeType: "image/png" }];
+
+    host.prompt("s1", "look at this", images);
+    expect(fake.promptImages).toEqual([images]);
+
+    fake.isStreaming = true;
+    host.prompt("s1", "and this", images);
+    expect(fake.steerImages).toEqual([images]);
+  });
+
+  it("renames a live session", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    expect(host.rename("s1", "My project")).toBe("My project");
+    expect(fake.sessionName).toBe("My project");
+    expect(() => host.rename("nope", "x")).toThrow(SessionNotFoundError);
   });
 
   it("merges live and persisted sessions, deduped by path", async () => {

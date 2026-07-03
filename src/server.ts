@@ -2,8 +2,8 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
-import type { ModelSnapshot, SessionHost } from "./session-host.js";
-import { type ClientRequest, parseClientRequest, ProtocolError } from "./protocol.js";
+import type { ImageContent, ModelSnapshot, SessionHost } from "./session-host.js";
+import { type ClientRequest, type ImageAttachment, parseClientRequest, ProtocolError } from "./protocol.js";
 
 export interface ServerOptions {
   host: string;
@@ -41,21 +41,30 @@ function serveStatic(webRoot: string, req: http.IncomingMessage, res: http.Serve
   fs.createReadStream(filePath).pipe(res);
 }
 
+function toImageContents(images: ImageAttachment[] | undefined): ImageContent[] | undefined {
+  return images?.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }));
+}
+
 async function dispatch(
   request: ClientRequest,
   options: ServerOptions,
   client: { send(payload: unknown): void },
+  sessionsChanged: () => void,
 ): Promise<unknown> {
   const { sessionHost } = options;
   switch (request.type) {
     case "sessions.list":
       return { sessions: await sessionHost.listSessions(), workspaceRoot: options.workspaceRoot };
-    case "sessions.create":
-      return { session: await sessionHost.createSession(request.workspace, request.model) };
+    case "sessions.create": {
+      const session = await sessionHost.createSession(request.workspace, request.model);
+      sessionsChanged();
+      return { session };
+    }
     case "sessions.resume":
       return { session: await sessionHost.resumeSession(request.path) };
     case "sessions.delete":
       await sessionHost.deleteSession(request.path);
+      sessionsChanged();
       return {};
     case "session.attach":
       return sessionHost.attach(request.sessionId, client);
@@ -63,13 +72,13 @@ async function dispatch(
       sessionHost.detach(request.sessionId, client);
       return {};
     case "session.prompt":
-      sessionHost.prompt(request.sessionId, request.text);
+      sessionHost.prompt(request.sessionId, request.text, toImageContents(request.images));
       return {};
     case "session.steer":
-      sessionHost.steer(request.sessionId, request.text);
+      sessionHost.steer(request.sessionId, request.text, toImageContents(request.images));
       return {};
     case "session.followup":
-      sessionHost.followUp(request.sessionId, request.text);
+      sessionHost.followUp(request.sessionId, request.text, toImageContents(request.images));
       return {};
     case "session.abort":
       await sessionHost.abort(request.sessionId);
@@ -78,6 +87,11 @@ async function dispatch(
       return { model: await sessionHost.setModel(request.sessionId, request.provider, request.modelId) };
     case "session.set_thinking":
       return { thinkingLevel: sessionHost.setThinkingLevel(request.sessionId, request.level) };
+    case "session.rename": {
+      const name = sessionHost.rename(request.sessionId, request.name);
+      sessionsChanged();
+      return { name };
+    }
     case "models.list":
       return { models: options.listModels() };
   }
@@ -94,6 +108,14 @@ export function startServer(options: ServerOptions): http.Server {
   });
 
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+
+  const broadcastSessionsChanged = (): void => {
+    for (const socket of wss.clients) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "sessions_changed" }));
+      }
+    }
+  };
 
   wss.on("connection", (socket: WebSocket) => {
     const client = {
@@ -117,7 +139,7 @@ export function startServer(options: ServerOptions): http.Server {
         return;
       }
       try {
-        const result = await dispatch(request, options, client);
+        const result = await dispatch(request, options, client, broadcastSessionsChanged);
         client.send({ id: request.id, ok: true, result });
       } catch (error) {
         const message = error instanceof ProtocolError || error instanceof Error ? error.message : String(error);
