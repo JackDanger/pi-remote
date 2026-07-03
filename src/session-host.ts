@@ -1,3 +1,5 @@
+import type { SessionObserver } from "./telemetry.js";
+
 export interface ModelSnapshot {
   provider: string;
   id: string;
@@ -121,7 +123,10 @@ export class SessionHost {
   private readonly live = new Map<string, LiveSession>();
   private draining = false;
 
-  constructor(private readonly deps: SessionHostDeps) {}
+  constructor(
+    private readonly deps: SessionHostDeps,
+    private readonly observer?: SessionObserver,
+  ) {}
 
   get isDraining(): boolean {
     return this.draining;
@@ -235,7 +240,9 @@ export class SessionHost {
   prompt(sessionId: string, text: string, images?: ImageContent[]): void {
     this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
-    const run = entry.session.isStreaming
+    const steering = entry.session.isStreaming;
+    this.observer?.promptSent(sessionId, steering ? "steer" : "prompt", formatModel(entry.session.model));
+    const run = steering
       ? entry.session.steer(text, images)
       : entry.session.prompt(text, images?.length ? { images } : undefined);
     run.catch((error: unknown) => this.broadcastError(sessionId, error));
@@ -244,12 +251,14 @@ export class SessionHost {
   steer(sessionId: string, text: string, images?: ImageContent[]): void {
     this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
+    this.observer?.promptSent(sessionId, "steer", formatModel(entry.session.model));
     entry.session.steer(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
   followUp(sessionId: string, text: string, images?: ImageContent[]): void {
     this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
+    this.observer?.promptSent(sessionId, "followup", formatModel(entry.session.model));
     entry.session.followUp(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
@@ -259,7 +268,10 @@ export class SessionHost {
 
   async setModel(sessionId: string, provider: string, modelId: string): Promise<ModelSnapshot | undefined> {
     const entry = this.mustGetLive(sessionId);
+    const before = formatModel(entry.session.model);
     await this.deps.setSessionModel(entry.session, provider, modelId);
+    const after = formatModel(entry.session.model);
+    if (after !== before) this.observer?.modelSwitched(sessionId, before, after);
     return toModelSnapshot(entry.session.model);
   }
 
@@ -296,6 +308,7 @@ export class SessionHost {
       unsubscribe: () => {},
     };
     entry.unsubscribe = session.subscribe((event) => {
+      this.observer?.sessionEvent(session.sessionId, event);
       const payload = { type: "session_event", sessionId: session.sessionId, event };
       for (const client of entry.clients) {
         client.send(payload);
@@ -354,6 +367,10 @@ export class SessionHost {
       client.send(payload);
     }
   }
+}
+
+function formatModel(model: { provider: string; id: string } | undefined): string {
+  return model ? `${model.provider}/${model.id}` : "unknown";
 }
 
 function toModelSnapshot(

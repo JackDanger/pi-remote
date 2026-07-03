@@ -14,6 +14,7 @@ export interface Config {
   agentDir?: string;
   defaultModel?: ModelRef;
   shutdownGraceMs: number;
+  telemetry: boolean;
 }
 
 export const DEFAULT_SHUTDOWN_GRACE_MS = 120_000;
@@ -39,6 +40,7 @@ interface ConfigFile {
   agentDir?: string;
   defaultModel?: string;
   shutdownGraceMs?: number;
+  telemetry?: boolean;
 }
 
 function readConfigFile(filePath: string): ConfigFile {
@@ -66,6 +68,13 @@ function parseNonNegativeMs(value: string | number, source: string): number {
   return ms;
 }
 
+function parseBoolean(value: string, source: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean "${value}" from ${source}`);
+}
+
 export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.PI_REMOTE_CONFIG ?? path.join(os.homedir(), ".config", "pi-remote", "config.json");
 }
@@ -88,6 +97,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : file.shutdownGraceMs !== undefined
       ? parseNonNegativeMs(file.shutdownGraceMs, "config file")
       : DEFAULT_SHUTDOWN_GRACE_MS;
+  const telemetry = env.PI_REMOTE_TELEMETRY
+    ? parseBoolean(env.PI_REMOTE_TELEMETRY, "PI_REMOTE_TELEMETRY")
+    : (file.telemetry ?? true);
   return {
     host,
     port,
@@ -95,5 +107,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agentDir: agentDirRaw ? expandTilde(agentDirRaw) : undefined,
     defaultModel: defaultModelRaw ? parseModelRef(defaultModelRaw) : undefined,
     shutdownGraceMs,
+    telemetry,
   };
 }

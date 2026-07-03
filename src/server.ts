@@ -12,6 +12,7 @@ export interface ServerOptions {
   listModels: () => ModelSnapshot[];
   workspaceRoot: string;
   webRoot: string;
+  renderMetrics?: () => string;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -111,6 +112,11 @@ export function startServer(options: ServerOptions): http.Server {
           draining: options.sessionHost.isDraining,
         }),
       );
+      return;
+    }
+    if (req.url === "/metrics" && options.renderMetrics) {
+      res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
+      res.end(options.renderMetrics());
       return;
     }
     serveStatic(options.webRoot, req, res);

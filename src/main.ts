@@ -5,10 +5,17 @@ import { loadConfig } from "./config.js";
 import { createPiEnvironment } from "./pi.js";
 import { SessionHost } from "./session-host.js";
 import { startServer } from "./server.js";
+import { Telemetry } from "./telemetry.js";
 
 const config = loadConfig();
 const environment = createPiEnvironment(config);
-const sessionHost = new SessionHost(environment.hostDeps);
+const telemetry: Telemetry | undefined = config.telemetry
+  ? new Telemetry({
+      liveSessions: () => sessionHost.liveSessionIds().length,
+      streamingSessions: () => sessionHost.streamingSessionIds().length,
+    })
+  : undefined;
+const sessionHost: SessionHost = new SessionHost(environment.hostDeps, telemetry);
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 
@@ -21,6 +28,7 @@ const server = startServer({
   listModels: environment.listModels,
   workspaceRoot: environment.workspaceRoot,
   webRoot,
+  renderMetrics: telemetry ? () => telemetry.renderMetrics() : undefined,
 });
 
 server.on("listening", () => {

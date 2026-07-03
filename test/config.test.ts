@@ -79,6 +79,17 @@ describe("loadConfig", () => {
     expect(loadConfig({ PI_REMOTE_CONFIG: file, PI_REMOTE_SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
   });
 
+  it("defaults telemetry on, reads it from the config file, and lets env override it", () => {
+    expect(loadConfig({ PI_REMOTE_CONFIG: "/nonexistent/config.json" }).telemetry).toBe(true);
+    const file = withConfigFile({ telemetry: false });
+    expect(loadConfig({ PI_REMOTE_CONFIG: file }).telemetry).toBe(false);
+    expect(loadConfig({ PI_REMOTE_CONFIG: file, PI_REMOTE_TELEMETRY: "true" }).telemetry).toBe(true);
+    expect(loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_TELEMETRY: "0" }).telemetry).toBe(false);
+    expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_TELEMETRY: "maybe" })).toThrow(
+      /Invalid boolean/,
+    );
+  });
+
   it("rejects invalid shutdown grace values", () => {
     expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_SHUTDOWN_GRACE_MS: "soon" })).toThrow(
       /Invalid milliseconds/,
