@@ -103,6 +103,7 @@ Environment variables override the config file
 | `PI_REMOTE_AGENT_DIR` | `agentDir` | `~/.pi/agent` | Pi config dir (auth.json, models.json, settings.json, sessions/, extensions/, skills/) |
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings default, else first available | `provider/model-id` for new sessions |
 | `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | on SIGTERM/SIGINT, how long to wait for in-flight agent turns to finish before force-stopping them |
+| `PI_REMOTE_TELEMETRY` | `telemetry` | `true` | Prometheus `/metrics` endpoint + structured per-turn JSON logs (see Observability) |
 
 Example `config.json`:
 
@@ -122,6 +123,49 @@ uses, in Pi's normal priority order: `auth.json` credentials, environment variab
 extensions that call `pi.registerProvider(...)` (self-hosted OpenAI-compatible
 endpoints work this way). If `pi` works in a terminal on the server, pi-remote works
 with the same models.
+
+## Observability
+
+### `GET /metrics` — Prometheus
+
+Plaintext Prometheus exposition, no auth (like `/healthz` — the reverse proxy gates
+external access; scrape it from inside the trust boundary). A "turn" is one full agent
+run: prompt accepted → `agent_end`, which may span several model calls when tools run.
+Token figures come from the Pi SDK's per-assistant-message `usage`
+(`input` = fresh prompt tokens, `cacheRead` = prompt tokens served from the provider
+cache, `output` = generated tokens), summed across the turn.
+
+| metric | type | labels | meaning |
+|---|---|---|---|
+| `pi_remote_turn_prompt_tokens_total` | counter | `model` | fresh (uncached) prompt tokens processed |
+| `pi_remote_turn_cached_tokens_total` | counter | `model` | prompt tokens served from the provider cache |
+| `pi_remote_turn_completion_tokens_total` | counter | `model` | tokens generated |
+| `pi_remote_turn_ttft_seconds` | histogram | `model` | prompt accepted → first streamed assistant content event |
+| `pi_remote_turn_duration_seconds` | histogram | `model` | prompt accepted → `agent_end` |
+| `pi_remote_turn_cache_hit_ratio` | histogram | `model` | per turn: `cacheRead / (cacheRead + input)` — 1.0 = whole prompt cached |
+| `pi_remote_turns_total` | counter | `model`, `outcome` | completed turns; `outcome` ∈ `ok` \| `error` \| `aborted` |
+| `pi_remote_live_sessions` | gauge | — | sessions hosted in-process |
+| `pi_remote_streaming_sessions` | gauge | — | sessions currently running a turn |
+
+`model` is `provider/model-id` as reported by the model that actually answered, so
+label cardinality is bounded by the models you use; session ids never become labels.
+
+### Structured per-turn logs
+
+One JSON object per line on stdout (journald-friendly, ready to ship to Loki).
+High-cardinality values (session ids) live in the log body, never in metric labels.
+
+```json
+{"ts":"…","event":"prompt","session_id":"…","model":"solvency/qwen-fast","kind":"prompt|steer|followup"}
+{"ts":"…","event":"first_token","session_id":"…","model":"…","turn_seq":1,"ttft_ms":87919}
+{"ts":"…","event":"model_switch","session_id":"…","from":"a/b","to":"c/d"}
+{"ts":"…","event":"turn","session_id":"…","model":"…","turn_seq":1,"prompt_tokens":5438,"cached_tokens":0,"completion_tokens":27,"ttft_ms":87919,"duration_ms":88831,"tokens_per_sec":29.61,"outcome":"ok"}
+```
+
+`tokens_per_sec` is `completion_tokens` over the time from first token to `agent_end`
+(tool execution time included, so it understates pure decode speed on tool-heavy
+turns); it is `null` when no tokens streamed. Set `PI_REMOTE_TELEMETRY=false` to
+disable both the endpoint and the logs.
 
 ## Deployment
 

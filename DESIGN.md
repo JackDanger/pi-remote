@@ -177,6 +177,44 @@ The systemd unit must outlast the drain: `TimeoutStopSec` (150 in
 `deploy/pi-remote.service`) has to exceed the grace period, or systemd's SIGKILL
 defeats the whole mechanism.
 
+## Observability
+
+pi-remote is the primary client of a self-hosted model, so every turn is measured:
+tokens (fresh vs cache-served vs generated), time-to-first-token, whole-turn duration,
+and outcome, per model. Two outputs, one accounting path:
+
+- **`GET /metrics`** serves hand-rolled Prometheus exposition (counter / gauge /
+  histogram in ~130 lines — `prom-client` would be the project's only other runtime
+  dependency and buys nothing at this scale). Unauthenticated by design, like
+  `/healthz`: the reverse proxy is the trust boundary.
+- **Structured logs**: one JSON line per `prompt` / `first_token` / `model_switch` /
+  `turn` event on stdout, for journald today and Loki later. The full metric list and
+  log schema live in the README.
+
+Design points:
+
+- **One event path, not two.** `Telemetry` implements a `SessionObserver` interface
+  that `SessionHost` invokes from the same `session.subscribe` callback that fans
+  events out to WS clients, plus explicit hooks for prompt-accepted (`prompt`/`steer`/
+  `followUp`) and model switches (`setModel`). No second subscription to the SDK.
+- **A "turn" is one agent run** — prompt accepted → `agent_end` — which may span many
+  model calls when tools execute. Token counts sum the `usage` object on each
+  assistant `message_end` (`usage.input` = fresh prompt tokens, `usage.cacheRead` =
+  cache-served prompt tokens, `usage.output` = generated; verified against the SDK's
+  `Usage` type in `@earendil-works/pi-ai` and real session JSONL).
+- **TTFT starts at prompt-accepted, not `agent_start`**, timed with `performance.now()`.
+  First token = the first `message_update` on an assistant message whose
+  `assistantMessageEvent.type` is not `"start"` (the stream-open event fires before
+  the model produces anything).
+- **Outcome** maps the last assistant `stopReason` in the run: `error` → `error`,
+  `aborted` → `aborted`, everything else (`stop`, `length`, `toolUse`) → `ok`.
+- **Bounded label cardinality.** The only labels are `model` (taken from the
+  answering assistant message's `provider`/`model`, so it reflects what actually
+  served) and `outcome`. Session ids, turn seqs, and prompt content appear only in
+  log bodies, where cardinality is free.
+- Telemetry is on by default and switched off with `PI_REMOTE_TELEMETRY=false`
+  (`telemetry` in the config file), which removes the route and silences the logs.
+
 ## Security / trust boundary
 
 **The server performs no authentication and no sandboxing.** A connected client can run
@@ -203,6 +241,7 @@ Precedence: env > config file > defaults. Config file: `~/.config/pi-remote/conf
 | `PI_REMOTE_AGENT_DIR` | `agentDir` | Pi's own (`~/.pi/agent`) | Pi config dir: auth, models, settings, sessions, extensions, skills |
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings → first available | `provider/model-id` for new sessions |
 | `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | drain deadline: how long SIGTERM waits for running turns before force-stopping |
+| `PI_REMOTE_TELEMETRY` | `telemetry` | `true` | `/metrics` endpoint + structured per-turn JSON logs |
 
 Provider credentials are Pi's problem, deliberately: `auth.json`, env vars
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …), `models.json`, or provider-registering
@@ -214,6 +253,9 @@ Unit tests (vitest) cover the pure seams: config precedence and model-string par
 protocol request validation, and SessionHost lifecycle/fan-out against a fake session
 factory (attach/detach bookkeeping, multi-client event fan-out, prompt-vs-steer
 routing, and drain semantics: immediate resolve when idle, waiting on streaming
-sessions, new-work rejection, forced timeout, and the observe-once queued-turn rule). The end-to-end path (real model, real tool calls, real WS) is exercised by
+sessions, new-work rejection, forced timeout, and the observe-once queued-turn rule).
+Telemetry is tested with synthetic event streams and an injected clock (token
+accounting, TTFT/duration/outcome, per-session turn seq, exposition-format rendering)
+plus a real HTTP round-trip against `/metrics`. The end-to-end path (real model, real tool calls, real WS) is exercised by
 `spike/concurrent-sessions.mjs` and a live checklist in the README, since it requires a
 configured provider.
