@@ -11,8 +11,8 @@ Restart=on-failure
 RestartSec=3
 Environment=PI_REMOTE_HOST=127.0.0.1
 Environment=PI_REMOTE_PORT=3141
-Environment=PI_REMOTE_WORKSPACE_ROOT=%h/pi-workspaces
-EnvironmentFile=-%h/.config/pi-remote/env
+Environment=PI_REMOTE_WORKSPACE_ROOT=/home/%i/pi-workspaces
+EnvironmentFile=-/home/%i/.config/pi-remote/env
 WorkingDirectory=/opt/pi-remote
 
 [Install]
