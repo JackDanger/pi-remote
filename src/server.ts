@@ -104,7 +104,13 @@ export function startServer(options: ServerOptions): http.Server {
   const httpServer = http.createServer((req, res) => {
     if (req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, liveSessions: options.sessionHost.liveSessionIds().length }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          liveSessions: options.sessionHost.liveSessionIds().length,
+          draining: options.sessionHost.isDraining,
+        }),
+      );
       return;
     }
     serveStatic(options.webRoot, req, res);

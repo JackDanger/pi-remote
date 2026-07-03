@@ -32,11 +32,27 @@ server.on("listening", () => {
   }
 });
 
-function shutdown(): void {
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    console.warn(`${signal} received again — forcing immediate exit`);
+    sessionHost.disposeAll();
+    process.exit(1);
+  }
+  shuttingDown = true;
+  const streaming = sessionHost.streamingSessionIds();
+  console.log(
+    `${signal} received — draining ${streaming.length} running turn(s), grace ${config.shutdownGraceMs}ms (send ${signal} again to force exit)`,
+  );
+  server.close();
+  const { forced } = await sessionHost.drain(config.shutdownGraceMs);
+  if (forced.length > 0) {
+    console.warn(`drain deadline exceeded — force-stopping sessions still streaming: ${forced.join(", ")}`);
+  }
   sessionHost.disposeAll();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 2000).unref();
+  process.exit(0);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

@@ -3,6 +3,7 @@ import {
   type HostableSession,
   type ImageContent,
   type PersistedSessionInfo,
+  ServerDrainingError,
   SessionHost,
   SessionNotFoundError,
 } from "../src/session-host.js";
@@ -228,5 +229,129 @@ describe("SessionHost", () => {
   it("throws SessionNotFoundError for unknown live sessions", () => {
     const { host } = makeHost(new Map());
     expect(() => host.prompt("nope", "hi")).toThrow(SessionNotFoundError);
+  });
+});
+
+describe("SessionHost.drain", () => {
+  it("resolves immediately when no session is streaming", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    const started = Date.now();
+    const result = await host.drain(10_000, 5);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(result).toEqual({ drained: [], forced: [] });
+    expect(host.isDraining).toBe(true);
+  });
+
+  it("waits for a streaming session to finish its turn", async () => {
+    const fake = new FakeSession("s1");
+    fake.isStreaming = true;
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    setTimeout(() => {
+      fake.isStreaming = false;
+    }, 40);
+    const result = await host.drain(10_000, 5);
+    expect(result.drained).toEqual(["s1"]);
+    expect(result.forced).toEqual([]);
+  });
+
+  it("returns still-streaming sessions as forced when the deadline passes", async () => {
+    const streaming = new FakeSession("s1");
+    streaming.isStreaming = true;
+    const finishing = new FakeSession("s2");
+    finishing.isStreaming = true;
+    const { host } = makeHost(
+      new Map([
+        ["ws-a", streaming],
+        ["ws-b", finishing],
+      ]),
+    );
+    await host.createSession("ws-a", undefined);
+    await host.createSession("ws-b", undefined);
+
+    setTimeout(() => {
+      finishing.isStreaming = false;
+    }, 20);
+    const result = await host.drain(120, 5);
+    expect(result.drained).toEqual(["s2"]);
+    expect(result.forced).toEqual(["s1"]);
+    expect(streaming.disposed).toBe(false);
+  });
+
+  it("rejects new work while draining but keeps attach and event fan-out alive", async () => {
+    const fake = new FakeSession("s1", "/sessions/s1.jsonl");
+    fake.isStreaming = true;
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    const client = new Recorder();
+    host.attach("s1", client);
+
+    const drainDone = host.drain(10_000, 5);
+
+    expect(() => host.prompt("s1", "new work")).toThrow(ServerDrainingError);
+    expect(() => host.steer("s1", "new steer")).toThrow(ServerDrainingError);
+    expect(() => host.followUp("s1", "new followup")).toThrow(ServerDrainingError);
+    await expect(host.createSession("ws-a", undefined)).rejects.toThrow(ServerDrainingError);
+    await expect(host.resumeSession("/sessions/other.jsonl")).rejects.toThrow(ServerDrainingError);
+    expect(fake.prompts).toEqual([]);
+    expect(fake.steers).toEqual([]);
+
+    fake.emit({ type: "message_update" });
+    expect(client.received).toEqual([{ type: "session_event", sessionId: "s1", event: { type: "message_update" } }]);
+
+    const watcher = new Recorder();
+    host.attach("s1", watcher);
+    fake.emit({ type: "agent_end" });
+    expect(watcher.received).toHaveLength(1);
+
+    fake.isStreaming = false;
+    await expect(drainDone).resolves.toEqual({ drained: ["s1"], forced: [] });
+  });
+
+  it("does not wait for sessions that start streaming after drain begins", async () => {
+    const idleAtDrainStart = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", idleAtDrainStart]]));
+    await host.createSession("ws-a", undefined);
+
+    const drainDone = host.drain(10_000, 5);
+    idleAtDrainStart.isStreaming = true;
+    await expect(drainDone).resolves.toEqual({ drained: [], forced: [] });
+  });
+
+  it("counts a session drained once observed idle even if a queued turn restarts it", async () => {
+    const fake = new FakeSession("s1");
+    fake.isStreaming = true;
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    setTimeout(() => {
+      fake.isStreaming = false;
+      setTimeout(() => {
+        fake.isStreaming = true;
+      }, 100);
+    }, 20);
+    const result = await host.drain(5_000, 5);
+    expect(result.drained).toEqual(["s1"]);
+    expect(result.forced).toEqual([]);
+  });
+
+  it("reports streaming session ids", async () => {
+    const streaming = new FakeSession("s1");
+    streaming.isStreaming = true;
+    const idle = new FakeSession("s2");
+    const { host } = makeHost(
+      new Map([
+        ["ws-a", streaming],
+        ["ws-b", idle],
+      ]),
+    );
+    await host.createSession("ws-a", undefined);
+    await host.createSession("ws-b", undefined);
+    expect(host.streamingSessionIds()).toEqual(["s1"]);
+    expect(host.isDraining).toBe(false);
   });
 });

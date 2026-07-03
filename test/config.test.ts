@@ -67,4 +67,24 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_PORT: "notaport" })).toThrow(/Invalid port/);
     expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_PORT: "70000" })).toThrow(/Invalid port/);
   });
+
+  it("defaults the shutdown grace to two minutes", () => {
+    const config = loadConfig({ PI_REMOTE_CONFIG: "/nonexistent/config.json" });
+    expect(config.shutdownGraceMs).toBe(120_000);
+  });
+
+  it("reads the shutdown grace from the config file and lets env override it", () => {
+    const file = withConfigFile({ shutdownGraceMs: 30_000 });
+    expect(loadConfig({ PI_REMOTE_CONFIG: file }).shutdownGraceMs).toBe(30_000);
+    expect(loadConfig({ PI_REMOTE_CONFIG: file, PI_REMOTE_SHUTDOWN_GRACE_MS: "5000" }).shutdownGraceMs).toBe(5000);
+  });
+
+  it("rejects invalid shutdown grace values", () => {
+    expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_SHUTDOWN_GRACE_MS: "soon" })).toThrow(
+      /Invalid milliseconds/,
+    );
+    expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_SHUTDOWN_GRACE_MS: "-1" })).toThrow(
+      /Invalid milliseconds/,
+    );
+  });
 });

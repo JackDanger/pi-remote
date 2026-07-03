@@ -97,17 +97,78 @@ export class SessionNotFoundError extends Error {
   }
 }
 
+export class ServerDrainingError extends Error {
+  constructor() {
+    super("Server is shutting down — not accepting new work");
+  }
+}
+
+/**
+ * Outcome of a drain: `drained` sessions finished their running turn within the
+ * deadline; `forced` sessions were still streaming when the deadline hit and must
+ * be disposed mid-turn.
+ */
+export interface DrainResult {
+  drained: string[];
+  forced: string[];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class SessionHost {
   private readonly live = new Map<string, LiveSession>();
+  private draining = false;
 
   constructor(private readonly deps: SessionHostDeps) {}
 
+  get isDraining(): boolean {
+    return this.draining;
+  }
+
+  streamingSessionIds(): string[] {
+    return [...this.live.entries()].filter(([, entry]) => entry.session.isStreaming).map(([id]) => id);
+  }
+
+  /**
+   * Stop accepting new work and wait for every currently-running turn to finish.
+   *
+   * Drain waits only for the sessions streaming when it starts, and only until each
+   * is first observed idle. Queued steers/followups that would begin a new turn do
+   * not extend the drain: a session observed idle once is considered drained even if
+   * it starts streaming again. Sessions still streaming at the deadline are returned
+   * as `forced` for the caller to dispose. Attached clients keep receiving events
+   * throughout.
+   */
+  async drain(deadlineMs: number, pollIntervalMs = 250): Promise<DrainResult> {
+    this.draining = true;
+    const pending = new Set(this.streamingSessionIds());
+    const drained: string[] = [];
+    const deadline = Date.now() + deadlineMs;
+    while (pending.size > 0) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(pollIntervalMs, remainingMs));
+      for (const id of [...pending]) {
+        const entry = this.live.get(id);
+        if (!entry || !entry.session.isStreaming) {
+          pending.delete(id);
+          drained.push(id);
+        }
+      }
+    }
+    return { drained, forced: [...pending] };
+  }
+
   async createSession(workspace: string | undefined, model: string | undefined): Promise<SessionSummary> {
+    this.rejectNewWorkWhileDraining();
     const opened = await this.deps.factory({ workspace, model });
     return this.adopt(opened);
   }
 
   async resumeSession(path: string): Promise<SessionSummary> {
+    this.rejectNewWorkWhileDraining();
     for (const entry of this.live.values()) {
       if (entry.session.sessionFile === path) {
         return this.summarizeLive(entry);
@@ -172,6 +233,7 @@ export class SessionHost {
   }
 
   prompt(sessionId: string, text: string, images?: ImageContent[]): void {
+    this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
     const run = entry.session.isStreaming
       ? entry.session.steer(text, images)
@@ -180,11 +242,13 @@ export class SessionHost {
   }
 
   steer(sessionId: string, text: string, images?: ImageContent[]): void {
+    this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
     entry.session.steer(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
   followUp(sessionId: string, text: string, images?: ImageContent[]): void {
+    this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
     entry.session.followUp(text, images).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
@@ -246,6 +310,10 @@ export class SessionHost {
     entry.session.dispose();
     entry.clients.clear();
     this.live.delete(id);
+  }
+
+  private rejectNewWorkWhileDraining(): void {
+    if (this.draining) throw new ServerDrainingError();
   }
 
   private mustGetLive(sessionId: string): LiveSession {

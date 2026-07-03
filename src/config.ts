@@ -13,7 +13,10 @@ export interface Config {
   workspaceRoot: string;
   agentDir?: string;
   defaultModel?: ModelRef;
+  shutdownGraceMs: number;
 }
+
+export const DEFAULT_SHUTDOWN_GRACE_MS = 120_000;
 
 export function parseModelRef(value: string): ModelRef {
   const slash = value.indexOf("/");
@@ -35,6 +38,7 @@ interface ConfigFile {
   workspaceRoot?: string;
   agentDir?: string;
   defaultModel?: string;
+  shutdownGraceMs?: number;
 }
 
 function readConfigFile(filePath: string): ConfigFile {
@@ -54,6 +58,14 @@ function parsePort(value: string | number, source: string): number {
   return port;
 }
 
+function parseNonNegativeMs(value: string | number, source: string): number {
+  const ms = typeof value === "number" ? value : Number.parseInt(value, 10);
+  if (!Number.isInteger(ms) || ms < 0) {
+    throw new Error(`Invalid milliseconds value "${value}" from ${source}`);
+  }
+  return ms;
+}
+
 export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.PI_REMOTE_CONFIG ?? path.join(os.homedir(), ".config", "pi-remote", "config.json");
 }
@@ -71,11 +83,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const agentDirRaw = env.PI_REMOTE_AGENT_DIR ?? file.agentDir;
   const defaultModelRaw = env.PI_REMOTE_DEFAULT_MODEL ?? file.defaultModel;
+  const shutdownGraceMs = env.PI_REMOTE_SHUTDOWN_GRACE_MS
+    ? parseNonNegativeMs(env.PI_REMOTE_SHUTDOWN_GRACE_MS, "PI_REMOTE_SHUTDOWN_GRACE_MS")
+    : file.shutdownGraceMs !== undefined
+      ? parseNonNegativeMs(file.shutdownGraceMs, "config file")
+      : DEFAULT_SHUTDOWN_GRACE_MS;
   return {
     host,
     port,
     workspaceRoot,
     agentDir: agentDirRaw ? expandTilde(agentDirRaw) : undefined,
     defaultModel: defaultModelRaw ? parseModelRef(defaultModelRaw) : undefined,
+    shutdownGraceMs,
   };
 }
