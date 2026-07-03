@@ -2,6 +2,7 @@ export interface ModelSnapshot {
   provider: string;
   id: string;
   name?: string;
+  reasoning?: boolean;
 }
 
 /** Matches Pi's ImageContent shape structurally, without importing the SDK here. */
@@ -288,9 +289,11 @@ export class SessionHost {
 }
 
 function toModelSnapshot(
-  model: { provider: string; id: string; name?: string } | undefined,
+  model: { provider: string; id: string; name?: string; reasoning?: boolean } | undefined,
 ): ModelSnapshot | undefined {
-  return model ? { provider: model.provider, id: model.id, name: model.name } : undefined;
+  return model
+    ? { provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning }
+    : undefined;
 }
 
 function extractText(content: unknown): string {

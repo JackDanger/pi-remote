@@ -16,6 +16,7 @@ interface ModelSnapshot {
   provider: string;
   id: string;
   name?: string;
+  reasoning?: boolean;
 }
 
 interface ContentBlock {
@@ -447,6 +448,9 @@ function chatTitle(): string {
 function openSessionSheet(): void {
   if (!chat) return;
   openSheet((body, close) => {
+    const findSelectedModel = () =>
+      models.find((m) => chat!.model && m.provider === chat!.model.provider && m.id === chat!.model.id);
+    const canThink = findSelectedModel()?.reasoning !== false;
     body.innerHTML = `
       <h2>Session</h2>
       <label>Name</label>
@@ -467,9 +471,11 @@ function openSessionSheet(): void {
       <label>Thinking</label>
       <div class="thinking-row">
         ${THINKING_LEVELS.map(
-          (l) => `<button class="seg ${l === chat!.thinkingLevel ? "on" : ""}" data-level="${l}">${l}</button>`,
+          (l) =>
+            `<button class="seg ${l === chat!.thinkingLevel ? "on" : ""}" data-level="${l}" ${canThink ? "" : "disabled"}>${l}</button>`,
         ).join("")}
       </div>
+      <div class="sheet-meta" id="thinking-note" ${canThink ? "hidden" : ""}>Thinking isn't available for this model.</div>
       <div class="sheet-meta">${escapeHtml(chat!.summary.workspace)}</div>
     `;
     const nameInput = body.querySelector("input[name=name]") as HTMLInputElement;
@@ -502,6 +508,11 @@ function openSessionSheet(): void {
         chat.model = model;
         const chip = document.getElementById("model-chip");
         if (chip) chip.textContent = modelLabel(model);
+        toast(`Switched to ${modelLabel(model)} · loads on your next message`);
+        const nowCanThink = model?.reasoning !== false;
+        for (const b of body.querySelectorAll<HTMLButtonElement>(".thinking-row .seg")) b.disabled = !nowCanThink;
+        const note = body.querySelector("#thinking-note") as HTMLElement | null;
+        if (note) note.hidden = nowCanThink;
       } catch (error) {
         toast(String((error as Error).message));
       }

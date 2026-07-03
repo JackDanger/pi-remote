@@ -120,7 +120,7 @@ export function createPiEnvironment(config: Config): PiEnvironment {
   };
 
   const listModels = (): ModelSnapshot[] =>
-    modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name }));
+    modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name, reasoning: m.reasoning }));
 
   const warmup = async (): Promise<void> => {
     fs.mkdirSync(config.workspaceRoot, { recursive: true });
