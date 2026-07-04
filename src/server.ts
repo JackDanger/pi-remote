@@ -119,6 +119,9 @@ async function dispatch(
     case "session.compact":
       sessionHost.compact(request.sessionId, request.instructions);
       return {};
+    case "session.compact_abort":
+      sessionHost.abortCompaction(request.sessionId);
+      return {};
     case "session.set_model":
       return { model: await sessionHost.setModel(request.sessionId, request.provider, request.modelId) };
     case "session.set_thinking":

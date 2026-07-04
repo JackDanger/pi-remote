@@ -1,4 +1,12 @@
 import { gateCompact, parseCompactCommand } from "./compact-command.js";
+import {
+  COMPACTING_LABEL,
+  classifyCompactionEnd,
+  compactingElapsed,
+  compactionApplied,
+  compactionResultTitle,
+  type CompactionEndEvent,
+} from "./compaction-view.js";
 import { escapeHtml, renderMarkdown } from "./markdown.js";
 import { ConnectionLostError, Rpc, type ConnState, type SocketLike } from "./rpc.js";
 import {
@@ -55,6 +63,8 @@ interface ChatMessage {
   customType?: string;
   display?: boolean;
   summary?: string;
+  tokensBefore?: number;
+  estimatedTokensAfter?: number;
 }
 
 interface AttachState {
@@ -81,6 +91,7 @@ interface ChatState {
   thinkingLevel: string;
   streaming: boolean;
   compacting: boolean;
+  compactionStartedAt?: number;
   deliverMode: "steer" | "followup";
   attachments: ImageAttachment[];
   queuedNotes: string[];
@@ -486,6 +497,7 @@ function buildComposer(): void {
     <div class="status-bar" id="status-bar" hidden>
       <span class="status-state" id="status-state"></span>
       <span class="status-stats" id="status-stats"></span>
+      <button class="cancel-compact" id="compact-cancel" hidden>Cancel</button>
     </div>
     <div class="queue-note" id="queue-note" hidden></div>
     <div class="attach-strip" id="attach-strip" hidden></div>
@@ -528,6 +540,7 @@ function buildComposer(): void {
     if (!chat) return;
     void rpc.request("session.abort", { sessionId: chat.summary.sessionId }).catch((e: Error) => toast(e.message));
   };
+  (ui.footer.querySelector("#compact-cancel") as HTMLButtonElement).onclick = () => void cancelCompaction();
   for (const seg of ui.footer.querySelectorAll<HTMLButtonElement>(".deliver-row .seg")) {
     seg.onclick = () => {
       if (!chat) return;
@@ -669,16 +682,35 @@ async function sendCompact(instructions?: string): Promise<void> {
     return;
   }
   chat.compacting = true;
+  chat.compactionStartedAt = Date.now();
+  renderStatusBar();
   try {
     await rpc.request("session.compact", {
       sessionId: chat.summary.sessionId,
       ...(instructions ? { instructions } : {}),
     });
-    toast("compacting…", "info");
   } catch (error) {
-    if (chat) chat.compacting = false;
+    clearCompactingState();
     toast(String((error as Error).message));
   }
+}
+
+function clearCompactingState(): void {
+  if (!chat) return;
+  chat.compacting = false;
+  chat.compactionStartedAt = undefined;
+  renderStatusBar();
+}
+
+async function cancelCompaction(): Promise<void> {
+  if (!chat || !chat.compacting) return;
+  try {
+    await rpc.request("session.compact_abort", { sessionId: chat.summary.sessionId });
+  } catch (error) {
+    toast(String((error as Error).message));
+    return;
+  }
+  clearCompactingState();
 }
 
 function updateStreamingUi(): void {
@@ -713,7 +745,17 @@ function renderStatusBar(): void {
   const bar = document.getElementById("status-bar");
   const stateEl = document.getElementById("status-state");
   const statsEl = document.getElementById("status-stats");
+  const cancelBtn = document.getElementById("compact-cancel") as HTMLButtonElement | null;
   if (!bar || !stateEl || !statsEl) return;
+  if (chat.compacting) {
+    bar.hidden = false;
+    stateEl.innerHTML = `<span class="work-spin"></span>${escapeHtml(COMPACTING_LABEL)}`;
+    stateEl.classList.remove("idle", "err");
+    statsEl.textContent = compactingElapsed(chat.compactionStartedAt, Date.now());
+    if (cancelBtn) cancelBtn.hidden = false;
+    return;
+  }
+  if (cancelBtn) cancelBtn.hidden = true;
   if (!chat.streaming && !chat.telemetry) {
     bar.hidden = true;
     return;
@@ -734,7 +776,7 @@ function setActivity(activity: TurnActivity): void {
 }
 
 window.setInterval(() => {
-  if (view === "chat" && chat?.streaming) renderStatusBar();
+  if (view === "chat" && (chat?.streaming || chat?.compacting)) renderStatusBar();
 }, 1000);
 
 function onLogScroll(): void {
@@ -805,7 +847,7 @@ function buildMessageNode(message: ChatMessage, index: number): HTMLElement | un
           <div class="tool-body"><pre class="tool-pre">${escapeHtml(message.output ?? "")}</pre></div>
         </details>`);
     case "compactionSummary":
-      return el(`<div class="sys-row" data-mi="${index}">context compacted</div>`);
+      return compactionSummaryNode(message, index);
     case "branchSummary":
       return el(`<div class="sys-row" data-mi="${index}">returned from branch</div>`);
     case "custom": {
@@ -820,6 +862,24 @@ function buildMessageNode(message: ChatMessage, index: number): HTMLElement | un
       return el(`<div class="msg" data-mi="${index}">${renderMarkdown(text)}</div>`);
     }
   }
+}
+
+const compactionAfterTokens = new Map<string, number>();
+
+function compactionAfterKey(sessionId: string, tokensBefore: number): string {
+  return `${sessionId}:${tokensBefore}`;
+}
+
+function compactionSummaryNode(message: ChatMessage, index: number): HTMLElement {
+  const before = typeof message.tokensBefore === "number" ? message.tokensBefore : undefined;
+  const after =
+    message.estimatedTokensAfter ??
+    (before !== undefined && chat ? compactionAfterTokens.get(compactionAfterKey(chat.summary.sessionId, before)) : undefined);
+  return el(`
+    <details class="compaction-result" data-mi="${index}">
+      <summary>${escapeHtml(compactionResultTitle(before, after))}</summary>
+      <div class="compaction-summary">${renderMarkdown(message.summary ?? "")}</div>
+    </details>`);
 }
 
 function userNode(message: ChatMessage, index: number): HTMLElement {
@@ -1151,12 +1211,39 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       break;
     case "compaction_start":
       chat.compacting = true;
-      statusRow("compaction", "compacting context…");
+      chat.compactionStartedAt ??= Date.now();
+      renderStatusBar();
       break;
-    case "compaction_end":
+    case "compaction_end": {
       chat.compacting = false;
-      removeStatusRow("compaction");
+      chat.compactionStartedAt = undefined;
+      const outcome = classifyCompactionEnd(event as unknown as CompactionEndEvent);
+      if (outcome.kind === "done") {
+        if (outcome.result.estimatedTokensAfter !== undefined) {
+          compactionAfterTokens.set(
+            compactionAfterKey(sessionId, outcome.result.tokensBefore),
+            outcome.result.estimatedTokensAfter,
+          );
+        }
+        const message: ChatMessage = {
+          role: "compactionSummary",
+          summary: outcome.result.summary,
+          tokensBefore: outcome.result.tokensBefore,
+          estimatedTokensAfter: outcome.result.estimatedTokensAfter,
+        };
+        chat.messages.push(message);
+        appendNode(messageNode(message, chat.messages.length - 1));
+      } else if (outcome.kind === "canceled") {
+        appendNode(el(`<div class="sys-row">Compaction canceled</div>`));
+      } else if (outcome.kind === "empty") {
+        appendNode(el(`<div class="sys-row">${escapeHtml(outcome.message)}</div>`));
+      } else {
+        appendNode(el(`<div class="sys-row err">${escapeHtml(outcome.message)}</div>`));
+      }
+      renderStatusBar();
+      scrollLogToBottom();
       break;
+    }
     default:
       break;
   }
@@ -1201,12 +1288,13 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
     const state = await attachWithResume(sessionId, chat.summary.path);
     if (!chat || view !== "chat" || chat.summary.sessionId !== sessionId) return;
     const drifted = state.messages.length !== chat.messages.length;
+    chat.compacting = chat.compacting && !compactionApplied(chat.messages, state.messages);
+    if (!chat.compacting) chat.compactionStartedAt = undefined;
     chat.summary = state.summary;
     chat.messages = state.messages;
     chat.model = state.model;
     chat.thinkingLevel = state.thinkingLevel;
     if (options.trustServerStreaming !== false) chat.streaming = state.summary.streaming;
-    if (ui.main.querySelector('[data-status="compaction"]') === null) chat.compacting = false;
     if (state.telemetry) {
       chat.telemetry = state.telemetry;
       chat.telemetryReceivedAt = Date.now();

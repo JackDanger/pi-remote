@@ -84,6 +84,15 @@ describe("parseClientRequest", () => {
     ).toMatchObject({ type: "session.compact", sessionId: "s", instructions: "keep the plan" });
   });
 
+  it("accepts session.compact_abort and requires its sessionId", () => {
+    expect(
+      parseClientRequest(JSON.stringify({ id: 14, type: "session.compact_abort", sessionId: "s" })),
+    ).toMatchObject({ type: "session.compact_abort", sessionId: "s" });
+    expect(() => parseClientRequest(JSON.stringify({ id: 15, type: "session.compact_abort" }))).toThrow(
+      /requires string field "sessionId"/,
+    );
+  });
+
   it("rejects session.compact without a sessionId", () => {
     expect(() => parseClientRequest(JSON.stringify({ id: 12, type: "session.compact" }))).toThrow(
       /requires string field "sessionId"/,

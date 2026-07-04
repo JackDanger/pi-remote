@@ -15,6 +15,7 @@ export type ClientRequest =
   | { id: number; type: "session.followup"; sessionId: string; text: string; images?: ImageAttachment[] }
   | { id: number; type: "session.abort"; sessionId: string }
   | { id: number; type: "session.compact"; sessionId: string; instructions?: string }
+  | { id: number; type: "session.compact_abort"; sessionId: string }
   | { id: number; type: "session.set_model"; sessionId: string; provider: string; modelId: string }
   | { id: number; type: "session.set_thinking"; sessionId: string; level: string }
   | { id: number; type: "session.rename"; sessionId: string; name: string }
@@ -35,6 +36,7 @@ const REQUIRED_STRING_FIELDS: Record<RequestType, readonly string[]> = {
   "session.followup": ["sessionId", "text"],
   "session.abort": ["sessionId"],
   "session.compact": ["sessionId"],
+  "session.compact_abort": ["sessionId"],
   "session.set_model": ["sessionId", "provider", "modelId"],
   "session.set_thinking": ["sessionId", "level"],
   "session.rename": ["sessionId", "name"],

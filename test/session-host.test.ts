@@ -23,6 +23,7 @@ class FakeSession implements HostableSession {
   steerImages: ImageContent[][] = [];
   followUps: string[] = [];
   aborted = 0;
+  compactionAborts = 0;
   compacts: (string | undefined)[] = [];
   compactError: Error | undefined = undefined;
   private listeners = new Set<(event: unknown) => void>();
@@ -63,6 +64,10 @@ class FakeSession implements HostableSession {
     if (this.compactError) throw this.compactError;
     this.compacts.push(instructions);
     return { summary: "compacted" };
+  }
+
+  abortCompaction(): void {
+    this.compactionAborts++;
   }
 
   setThinkingLevel(level: never): void {
@@ -197,6 +202,17 @@ describe("SessionHost", () => {
   it("throws SessionNotFoundError when compacting an unknown session", () => {
     const { host } = makeHost(new Map());
     expect(() => host.compact("ghost")).toThrow(SessionNotFoundError);
+  });
+
+  it("aborts a running compaction on the live session", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    host.abortCompaction("s1");
+
+    expect(fake.compactionAborts).toBe(1);
+    expect(() => host.abortCompaction("ghost")).toThrow(SessionNotFoundError);
   });
 
   it("broadcasts a session_error to attached clients when compaction fails", async () => {
