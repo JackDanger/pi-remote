@@ -33,6 +33,15 @@ const CONTENT_TYPES: Record<string, string> = {
   ".webmanifest": "application/manifest+json",
 };
 
+const FINGERPRINTED_ASSET = /\.[0-9a-f]{8,}\.(?:js|css)$/;
+const CACHEABLE_MEDIA_EXTENSIONS = new Set([".png", ".svg", ".ico"]);
+
+export function cacheControlFor(filePath: string): string {
+  if (FINGERPRINTED_ASSET.test(filePath)) return "public, max-age=31536000, immutable";
+  if (CACHEABLE_MEDIA_EXTENSIONS.has(path.extname(filePath))) return "public, max-age=86400";
+  return "no-cache";
+}
+
 function serveStatic(webRoot: string, req: http.IncomingMessage, res: http.ServerResponse): void {
   const url = new URL(req.url ?? "/", "http://localhost");
   const requested = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -46,7 +55,19 @@ function serveStatic(webRoot: string, req: http.IncomingMessage, res: http.Serve
     res.writeHead(404).end("not found");
     return;
   }
-  res.writeHead(200, { "content-type": CONTENT_TYPES[path.extname(filePath)] ?? "application/octet-stream" });
+  const stats = fs.statSync(filePath);
+  const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+  const headers = {
+    "content-type": CONTENT_TYPES[path.extname(filePath)] ?? "application/octet-stream",
+    "cache-control": cacheControlFor(filePath),
+    etag,
+    "last-modified": stats.mtime.toUTCString(),
+  };
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, headers).end();
+    return;
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(filePath).pipe(res);
 }
 
