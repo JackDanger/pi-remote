@@ -85,7 +85,13 @@ The bundled frontend is built for one-handed phone use (iOS Safari first):
   colored diffs, "show all" for long results)
 - photo/camera attachments, downscaled client-side and sent with the prompt
 - stop / steer-now / queue-after-done controls while the agent runs
-- session rename, model picker, and thinking level in a per-session sheet
+- a live status bar above the composer: what the agent is doing right now (waiting /
+  thinking / writing / which tool is running), elapsed turn time, live tokens/sec,
+  tokens generated, and TTFT while it runs; after the turn, a one-line summary
+  (tokens, tok/s, TTFT, prompt size, cache-hit %) — fed by `session_telemetry` pushes
+  (see Observability)
+- session rename, model picker, and thinking level in a per-session sheet (the header
+  chip shows the active model and thinking level at all times)
 - aggressive reconnect: exponential backoff, instant retry on foregrounding, and
   automatic session re-resume after a server restart — a dropped connection mid-run
   recovers to the live stream
@@ -167,6 +173,21 @@ High-cardinality values (session ids) live in the log body, never in metric labe
 turns); it is `null` when no tokens streamed. Set `PI_REMOTE_TELEMETRY=false` to
 disable both the endpoint and the logs.
 
+### Live telemetry in the UI
+
+The same turn accounting feeds the browser status bar. Clients attached to a session
+receive `{ "type": "session_telemetry", "sessionId", "telemetry" }` pushes carrying a
+compact snapshot: `phase` (`waiting` | `responding` | `idle`), `turnSeq`, `model`,
+`elapsedMs`, `ttftMs`, `promptTokens`, `cachedTokens`, `completionTokens`,
+`tokensPerSec`, `cacheHitRatio`, and `outcome` (set once the turn ends). Snapshots are
+pushed on turn start, first token, each assistant `message_end`, turn end, and at most
+every 500 ms during streaming. Between usage reports, `completionTokens` includes an
+estimate from streamed characters (~4 chars/token) that snaps to the provider-reported
+count at each `message_end`. `session.attach` returns the latest snapshot as a
+`telemetry` field, so a reconnecting client shows stats immediately. Disabling
+telemetry also disables these pushes — the status bar then falls back to activity
+labels without numbers.
+
 ## Deployment
 
 ### systemd
@@ -219,7 +240,8 @@ One WebSocket at `/ws`. Client sends `{ id, type, ...params }`, server answers
 `session.prompt`/`steer`/`followup` accept an optional
 `images: [{ data, mimeType }]` array (base64, `image/*`, max 8 per message) for
 photo attachments; `sessions_changed` is broadcast to every client when a session
-is created, deleted, or renamed.
+is created, deleted, or renamed; `session_telemetry` pushes a live turn snapshot to
+attached clients (see Observability → Live telemetry in the UI).
 
 Any WebSocket client can drive it — the bundled web app is just one consumer. See
 [DESIGN.md](DESIGN.md) for the architecture and the decisions behind it.

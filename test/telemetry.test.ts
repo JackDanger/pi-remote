@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { Counter, Gauge, Histogram, MetricsRegistry } from "../src/metrics.js";
+import type { TelemetrySnapshot } from "../src/protocol.js";
 import { Telemetry } from "../src/telemetry.js";
 
 interface Harness {
   telemetry: Telemetry;
   logs: Record<string, unknown>[];
+  snapshots: { sessionId: string; snapshot: TelemetrySnapshot }[];
   clock: { value: number };
 }
 
 function makeTelemetry(gauges: { live?: () => number; streaming?: () => number } = {}): Harness {
   const logs: Record<string, unknown>[] = [];
+  const snapshots: { sessionId: string; snapshot: TelemetrySnapshot }[] = [];
   const clock = { value: 0 };
   const telemetry = new Telemetry({
     liveSessions: gauges.live ?? (() => 0),
@@ -17,8 +20,17 @@ function makeTelemetry(gauges: { live?: () => number; streaming?: () => number }
     now: () => clock.value,
     wallClock: () => "2026-01-01T00:00:00.000Z",
     emitLog: (line) => logs.push(JSON.parse(line) as Record<string, unknown>),
+    onSnapshot: (sessionId, snapshot) => snapshots.push({ sessionId, snapshot }),
   });
-  return { telemetry, logs, clock };
+  return { telemetry, logs, snapshots, clock };
+}
+
+function textDeltaEvent(delta: string) {
+  return {
+    type: "message_update",
+    message: { role: "assistant", provider: "solvency", model: "qwen-fast" },
+    assistantMessageEvent: { type: "text_delta", delta },
+  };
 }
 
 function assistantUsageEvent(usage: Partial<Record<string, number>>, stopReason = "stop") {
@@ -181,6 +193,125 @@ describe("Telemetry outcomes and lifecycle logs", () => {
 
     expect(telemetry.renderMetrics()).not.toContain("pi_remote_turn_prompt_tokens_total{");
     expect(logs.filter((l) => l.event === "turn")).toHaveLength(1);
+  });
+});
+
+describe("Telemetry live snapshots", () => {
+  it("emits waiting → responding → idle snapshots across a turn", () => {
+    const { telemetry, snapshots, clock } = makeTelemetry();
+    telemetry.promptSent("s1", "prompt", "solvency/qwen-fast");
+    telemetry.sessionEvent("s1", { type: "agent_start" });
+    expect(snapshots[0].snapshot).toMatchObject({
+      phase: "waiting",
+      turnSeq: 1,
+      elapsedMs: 0,
+      ttftMs: null,
+      tokensPerSec: null,
+      outcome: null,
+    });
+
+    clock.value = 1000;
+    telemetry.sessionEvent("s1", textDeltaEvent("hola"));
+    expect(snapshots[1].snapshot).toMatchObject({ phase: "responding", ttftMs: 1000 });
+
+    clock.value = 2000;
+    telemetry.sessionEvent("s1", textDeltaEvent("x".repeat(40)));
+    expect(snapshots[2].snapshot).toMatchObject({ completionTokens: 11, tokensPerSec: 11, elapsedMs: 2000 });
+
+    telemetry.sessionEvent("s1", assistantUsageEvent({ input: 100, cacheRead: 300, output: 50 }));
+    expect(snapshots[3].snapshot).toMatchObject({
+      completionTokens: 50,
+      promptTokens: 100,
+      cachedTokens: 300,
+      cacheHitRatio: 0.75,
+      tokensPerSec: 50,
+    });
+
+    clock.value = 3000;
+    telemetry.sessionEvent("s1", { type: "agent_end" });
+    expect(snapshots[4].snapshot).toMatchObject({
+      phase: "idle",
+      outcome: "ok",
+      elapsedMs: 3000,
+      ttftMs: 1000,
+      completionTokens: 50,
+      tokensPerSec: 25,
+    });
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.every((s) => s.sessionId === "s1")).toBe(true);
+  });
+
+  it("throttles streaming-delta snapshots to the emission interval", () => {
+    const { telemetry, snapshots, clock } = makeTelemetry();
+    telemetry.sessionEvent("s1", { type: "agent_start" });
+    clock.value = 100;
+    telemetry.sessionEvent("s1", textDeltaEvent("a"));
+    clock.value = 200;
+    telemetry.sessionEvent("s1", textDeltaEvent("b"));
+    clock.value = 300;
+    telemetry.sessionEvent("s1", textDeltaEvent("c"));
+    expect(snapshots).toHaveLength(2);
+    clock.value = 599;
+    telemetry.sessionEvent("s1", textDeltaEvent("d"));
+    expect(snapshots).toHaveLength(2);
+    clock.value = 600;
+    telemetry.sessionEvent("s1", textDeltaEvent("e"));
+    expect(snapshots).toHaveLength(3);
+    expect(snapshots[2].snapshot.completionTokens).toBe(1);
+  });
+
+  it("stacks a fresh streamed-char estimate on top of the exact count after each usage report", () => {
+    const { telemetry, snapshots, clock } = makeTelemetry();
+    telemetry.sessionEvent("s1", { type: "agent_start" });
+    clock.value = 1000;
+    telemetry.sessionEvent("s1", textDeltaEvent("x".repeat(40)));
+    clock.value = 1600;
+    telemetry.sessionEvent("s1", textDeltaEvent("x".repeat(40)));
+    expect(snapshots.at(-1)?.snapshot.completionTokens).toBe(20);
+
+    telemetry.sessionEvent("s1", assistantUsageEvent({ input: 10, output: 50 }));
+    expect(snapshots.at(-1)?.snapshot.completionTokens).toBe(50);
+
+    clock.value = 2200;
+    telemetry.sessionEvent("s1", textDeltaEvent("y".repeat(80)));
+    expect(snapshots.at(-1)?.snapshot.completionTokens).toBe(70);
+  });
+
+  it("reports null tokensPerSec and cacheHitRatio for a turn that produced nothing", () => {
+    const { telemetry, snapshots, clock } = makeTelemetry();
+    telemetry.sessionEvent("s1", { type: "agent_start" });
+    expect(snapshots[0].snapshot.cacheHitRatio).toBeNull();
+    clock.value = 5000;
+    telemetry.sessionEvent("s1", { type: "agent_end" });
+    expect(snapshots.at(-1)?.snapshot).toMatchObject({
+      phase: "idle",
+      outcome: "ok",
+      completionTokens: 0,
+      tokensPerSec: null,
+      cacheHitRatio: null,
+    });
+  });
+
+  it("snapshot() serves the live turn while active and the final turn afterwards", () => {
+    const { telemetry, clock } = makeTelemetry();
+    expect(telemetry.snapshot("nope")).toBeUndefined();
+
+    telemetry.sessionEvent("s1", { type: "agent_start" });
+    clock.value = 1000;
+    telemetry.sessionEvent("s1", textDeltaEvent("hey"));
+    clock.value = 4000;
+    expect(telemetry.snapshot("s1")).toMatchObject({ phase: "responding", elapsedMs: 4000, ttftMs: 1000 });
+
+    telemetry.sessionEvent("s1", assistantUsageEvent({ input: 10, output: 30 }, "aborted"));
+    clock.value = 5000;
+    telemetry.sessionEvent("s1", { type: "agent_end" });
+    clock.value = 60000;
+    expect(telemetry.snapshot("s1")).toMatchObject({
+      phase: "idle",
+      outcome: "aborted",
+      elapsedMs: 5000,
+      completionTokens: 30,
+    });
   });
 });
 

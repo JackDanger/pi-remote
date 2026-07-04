@@ -3,6 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { type HostableSession, SessionHost } from "../src/session-host.js";
 import { startServer } from "../src/server.js";
 import { Telemetry } from "../src/telemetry.js";
@@ -155,5 +156,70 @@ describe("GET /metrics", () => {
     const healthz = await get(port, "/healthz");
     expect(healthz.status).toBe(200);
     expect(JSON.parse(healthz.body)).toMatchObject({ ok: true });
+  });
+});
+
+describe("session.attach telemetry merge", () => {
+  const servers: http.Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+    servers.length = 0;
+  });
+
+  it("returns the latest telemetry snapshot in the attach result", async () => {
+    const fake = new FakeSession();
+    const logs: string[] = [];
+    let host!: SessionHost;
+    const telemetry = makeTelemetry(() => host, logs);
+    host = makeHost(fake, telemetry);
+    const server = startServer({
+      host: "127.0.0.1",
+      port: 0,
+      sessionHost: host,
+      listModels: () => [],
+      workspaceRoot: "/ws",
+      webRoot: fs.mkdtempSync(path.join(os.tmpdir(), "pi-remote-test-")),
+      latestTelemetry: (sessionId) => telemetry.snapshot(sessionId),
+    });
+    servers.push(server);
+    await new Promise((resolve) => server.on("listening", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+
+    await host.createSession("ws", undefined);
+    fake.emit({ type: "agent_start" });
+    fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        provider: "solvency",
+        model: "qwen-fast",
+        stopReason: "stop",
+        usage: { input: 11, output: 22, cacheRead: 33, cacheWrite: 0, totalTokens: 66 },
+      },
+    });
+    fake.emit({ type: "agent_end" });
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+    await new Promise((resolve) => socket.on("open", resolve));
+    const reply = await new Promise<Record<string, unknown>>((resolve) => {
+      socket.on("message", (data) => resolve(JSON.parse(String(data)) as Record<string, unknown>));
+      socket.send(JSON.stringify({ id: 1, type: "session.attach", sessionId: "s1" }));
+    });
+    socket.close();
+
+    expect(reply).toMatchObject({ id: 1, ok: true });
+    const result = reply.result as { telemetry?: Record<string, unknown> };
+    expect(result.telemetry).toMatchObject({
+      phase: "idle",
+      outcome: "ok",
+      model: "solvency/qwen-fast",
+      promptTokens: 11,
+      completionTokens: 22,
+      cachedTokens: 33,
+      cacheHitRatio: 0.75,
+      turnSeq: 1,
+    });
   });
 });

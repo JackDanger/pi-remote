@@ -1,4 +1,13 @@
 import { escapeHtml, renderMarkdown } from "./markdown.js";
+import {
+  activityForAssistantEvent,
+  finishedTurnStats,
+  formatDuration,
+  liveTurnStats,
+  statusLabel,
+  type TelemetrySnapshot,
+  type TurnActivity,
+} from "./turn-stats.js";
 
 interface SessionSummary {
   sessionId: string;
@@ -51,6 +60,7 @@ interface AttachState {
   messages: ChatMessage[];
   model?: ModelSnapshot;
   thinkingLevel: string;
+  telemetry?: TelemetrySnapshot;
 }
 
 interface ImageAttachment {
@@ -164,6 +174,10 @@ interface ChatState {
   deliverMode: "steer" | "followup";
   attachments: ImageAttachment[];
   queuedNotes: string[];
+  telemetry?: TelemetrySnapshot;
+  telemetryReceivedAt: number;
+  activity: TurnActivity;
+  turnStartedAt?: number;
 }
 
 const rpc = new Rpc();
@@ -257,6 +271,17 @@ function modelLabel(model: ModelSnapshot | undefined): string {
   if (!model) return "model";
   const label = model.name ?? model.id;
   return label.length > 20 ? `${label.slice(0, 19)}…` : label;
+}
+
+function modelChipLabel(): string {
+  if (!chat) return "model";
+  const label = modelLabel(chat.model);
+  return chat.thinkingLevel && chat.thinkingLevel !== "off" ? `${label} · ${chat.thinkingLevel}` : label;
+}
+
+function updateModelChip(): void {
+  const chip = document.getElementById("model-chip");
+  if (chip) chip.textContent = modelChipLabel();
 }
 
 function setConnState(state: ConnState): void {
@@ -404,6 +429,10 @@ async function openChat(sessionId: string): Promise<void> {
     deliverMode: "steer",
     attachments: [],
     queuedNotes: [],
+    telemetry: state.telemetry,
+    telemetryReceivedAt: Date.now(),
+    activity: { kind: state.summary.streaming ? "waiting" : "idle" },
+    turnStartedAt: state.summary.streaming ? Date.now() : undefined,
   };
   stickToBottom = true;
   renderChatShell();
@@ -421,7 +450,7 @@ function renderChatShell(): void {
       <h1 id="chat-title">${escapeHtml(chatTitle())}</h1>
       <div class="subtitle">${escapeHtml(shortWorkspace(chat.summary.workspace))}</div>
     </div>`);
-  const settingsBtn = el(`<button class="chip" id="model-chip">${escapeHtml(modelLabel(chat.model))}</button>`);
+  const settingsBtn = el(`<button class="chip" id="model-chip">${escapeHtml(modelChipLabel())}</button>`);
   ui.headerRow.append(backBtn, conn, titleBox, settingsBtn);
 
   backBtn.onclick = () => {
@@ -506,8 +535,7 @@ function openSessionSheet(): void {
           modelId: rest.join("/"),
         });
         chat.model = model;
-        const chip = document.getElementById("model-chip");
-        if (chip) chip.textContent = modelLabel(model);
+        updateModelChip();
         toast(`Switched to ${modelLabel(model)} · loads on your next message`);
         const nowCanThink = model?.reasoning !== false;
         for (const b of body.querySelectorAll<HTMLButtonElement>(".thinking-row .seg")) b.disabled = !nowCanThink;
@@ -526,6 +554,7 @@ function openSessionSheet(): void {
             level: btn.dataset.level ?? "off",
           });
           chat.thinkingLevel = thinkingLevel;
+          updateModelChip();
           for (const b of body.querySelectorAll(".thinking-row .seg")) {
             b.classList.toggle("on", (b as HTMLElement).dataset.level === thinkingLevel);
           }
@@ -540,7 +569,10 @@ function openSessionSheet(): void {
 function buildComposer(): void {
   ui.footer.hidden = false;
   ui.footer.innerHTML = `
-    <div class="working-row" id="working-row" hidden><span class="work-spin"></span><span id="working-label">Working…</span></div>
+    <div class="status-bar" id="status-bar" hidden>
+      <span class="status-state" id="status-state"></span>
+      <span class="status-stats" id="status-stats"></span>
+    </div>
     <div class="queue-note" id="queue-note" hidden></div>
     <div class="attach-strip" id="attach-strip" hidden></div>
     <div class="deliver-row" id="deliver-row" hidden>
@@ -674,7 +706,10 @@ async function sendPrompt(): Promise<void> {
   };
   const optimisticNode = messageNode(optimistic, -1);
   appendNode(optimisticNode, { optimistic: true });
-  if (freshRun) statusRow("awaiting", "Waiting for the model — the first message can take a while if the model has to load.");
+  if (freshRun) {
+    statusRow("awaiting", "Waiting for the model — the first message can take a while if the model has to load.");
+    chat.turnStartedAt = Date.now();
+  }
   scrollLogToBottom(true);
   try {
     await rpc.request(type, {
@@ -709,9 +744,47 @@ function updateStreamingUi(): void {
   }
   const badgeTarget = document.getElementById("chat-title");
   badgeTarget?.classList.toggle("streaming", chat.streaming);
-  const workingRow = document.getElementById("working-row");
-  if (workingRow) workingRow.hidden = !chat.streaming;
+  renderStatusBar();
 }
+
+function statusStats(): string {
+  if (!chat) return "";
+  const snapshot = chat.telemetry;
+  if (!snapshot) {
+    return chat.streaming && chat.turnStartedAt !== undefined ? formatDuration(Date.now() - chat.turnStartedAt) : "";
+  }
+  if (chat.streaming && snapshot.phase !== "idle") return liveTurnStats(snapshot, Date.now() - chat.telemetryReceivedAt);
+  return finishedTurnStats(snapshot);
+}
+
+function renderStatusBar(): void {
+  if (!chat) return;
+  const bar = document.getElementById("status-bar");
+  const stateEl = document.getElementById("status-state");
+  const statsEl = document.getElementById("status-stats");
+  if (!bar || !stateEl || !statsEl) return;
+  if (!chat.streaming && !chat.telemetry) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const label = statusLabel(chat.streaming, chat.activity, chat.telemetry?.outcome);
+  stateEl.innerHTML = `${chat.streaming ? '<span class="work-spin"></span>' : ""}${escapeHtml(label)}`;
+  stateEl.classList.toggle("idle", !chat.streaming);
+  stateEl.classList.toggle("err", !chat.streaming && chat.telemetry?.outcome === "error");
+  statsEl.textContent = statusStats();
+}
+
+function setActivity(activity: TurnActivity): void {
+  if (!chat) return;
+  if (chat.activity.kind === activity.kind && chat.activity.toolName === activity.toolName) return;
+  chat.activity = activity;
+  renderStatusBar();
+}
+
+window.setInterval(() => {
+  if (view === "chat" && chat?.streaming) renderStatusBar();
+}, 1000);
 
 function onLogScroll(): void {
   const main = ui.main;
@@ -1011,6 +1084,8 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
   switch (event.type) {
     case "agent_start":
       chat.streaming = true;
+      chat.turnStartedAt ??= Date.now();
+      chat.activity = { kind: "waiting" };
       removeStatusRow("retry");
       removeStatusRow("awaiting");
       updateStreamingUi();
@@ -1019,6 +1094,8 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       const willRetry = event.willRetry === true;
       chat.streaming = willRetry;
       if (!willRetry) {
+        chat.turnStartedAt = undefined;
+        chat.activity = { kind: "idle" };
         for (const status of ui.main.querySelectorAll(".sys-row.status")) status.remove();
         for (const spin of ui.main.querySelectorAll(".tool-status.running")) {
           spin.classList.remove("running");
@@ -1043,6 +1120,9 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       if (chat.messages.length === 0) chat.messages.push(message);
       else chat.messages[chat.messages.length - 1] = message;
       scheduleReplace(chat.messages.length - 1, message);
+      const streamEvent = event.assistantMessageEvent as { type?: string } | undefined;
+      const activity = activityForAssistantEvent(streamEvent?.type ?? "");
+      if (activity) setActivity(activity);
       break;
     }
     case "message_end": {
@@ -1058,6 +1138,7 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       const status = card?.querySelector(".tool-status");
       status?.classList.remove("pending", "ok", "err");
       status?.classList.add("running");
+      setActivity({ kind: "tool", toolName: String(event.toolName ?? "tool") });
       break;
     }
     case "tool_execution_update": {
@@ -1077,6 +1158,7 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       const status = card?.querySelector(".tool-status");
       status?.classList.remove("running", "pending");
       status?.classList.add(event.isError ? "err" : "ok");
+      setActivity({ kind: "waiting" });
       break;
     }
     case "queue_update": {
@@ -1105,6 +1187,7 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
     }
     case "thinking_level_changed":
       chat.thinkingLevel = String(event.level ?? chat.thinkingLevel);
+      updateModelChip();
       break;
     case "auto_retry_start":
       statusRow("retry", `retrying after error (attempt ${Number(event.attempt)}/${Number(event.maxAttempts)})…`);
@@ -1147,8 +1230,15 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
     chat.model = state.model;
     chat.thinkingLevel = state.thinkingLevel;
     if (options.trustServerStreaming !== false) chat.streaming = state.summary.streaming;
-    const chip = document.getElementById("model-chip");
-    if (chip) chip.textContent = modelLabel(chat.model);
+    if (state.telemetry) {
+      chat.telemetry = state.telemetry;
+      chat.telemetryReceivedAt = Date.now();
+    }
+    if (!chat.streaming) {
+      chat.turnStartedAt = undefined;
+      chat.activity = { kind: "idle" };
+    }
+    updateModelChip();
     const titleEl = document.getElementById("chat-title");
     if (titleEl) titleEl.textContent = chatTitle();
     if (drifted) {
@@ -1167,6 +1257,12 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
 rpc.onPush = (msg) => {
   if (msg.type === "session_event") {
     handleSessionEvent(String(msg.sessionId), msg.event as Record<string, unknown>);
+  } else if (msg.type === "session_telemetry") {
+    if (chat && view === "chat" && chat.summary.sessionId === msg.sessionId) {
+      chat.telemetry = msg.telemetry as TelemetrySnapshot;
+      chat.telemetryReceivedAt = Date.now();
+      renderStatusBar();
+    }
   } else if (msg.type === "session_error") {
     toast(String(msg.error));
     if (chat && view === "chat" && chat.summary.sessionId === msg.sessionId) {

@@ -7,14 +7,12 @@ export interface ModelSnapshot {
   reasoning?: boolean;
 }
 
-/** Matches Pi's ImageContent shape structurally, without importing the SDK here. */
 export interface ImageContent {
   type: "image";
   data: string;
   mimeType: string;
 }
 
-/** The slice of Pi's AgentSession that SessionHost drives; AgentSession satisfies it structurally. */
 export interface HostableSession {
   sessionId: string;
   sessionFile: string | undefined;
@@ -105,11 +103,6 @@ export class ServerDrainingError extends Error {
   }
 }
 
-/**
- * Outcome of a drain: `drained` sessions finished their running turn within the
- * deadline; `forced` sessions were still streaming when the deadline hit and must
- * be disposed mid-turn.
- */
 export interface DrainResult {
   drained: string[];
   forced: string[];
@@ -136,16 +129,6 @@ export class SessionHost {
     return [...this.live.entries()].filter(([, entry]) => entry.session.isStreaming).map(([id]) => id);
   }
 
-  /**
-   * Stop accepting new work and wait for every currently-running turn to finish.
-   *
-   * Drain waits only for the sessions streaming when it starts, and only until each
-   * is first observed idle. Queued steers/followups that would begin a new turn do
-   * not extend the drain: a session observed idle once is considered drained even if
-   * it starts streaming again. Sessions still streaming at the deadline are returned
-   * as `forced` for the caller to dispose. Attached clients keep receiving events
-   * throughout.
-   */
   async drain(deadlineMs: number, pollIntervalMs = 250): Promise<DrainResult> {
     this.draining = true;
     const pending = new Set(this.streamingSessionIds());
@@ -234,6 +217,14 @@ export class SessionHost {
   detachEverywhere(client: AttachedClient): void {
     for (const entry of this.live.values()) {
       entry.clients.delete(client);
+    }
+  }
+
+  pushToAttached(sessionId: string, payload: unknown): void {
+    const entry = this.live.get(sessionId);
+    if (!entry) return;
+    for (const client of entry.clients) {
+      client.send(payload);
     }
   }
 

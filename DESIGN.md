@@ -111,8 +111,11 @@ has.
 Single JSON message per WS frame. Client requests carry an `id`; the server replies
 with `{ id, ok, result | error }`. Server pushes are unsolicited:
 `{ type: "session_event", sessionId, event }` (raw `AgentSessionEvent`, untranslated),
-`{ type: "session_error", sessionId, error }`, and `{ type: "sessions_changed" }`
-(broadcast to every connected client on create/delete/rename).
+`{ type: "session_telemetry", sessionId, telemetry }` (compact live turn snapshot from
+`Telemetry`, sent only to clients attached to that session; absent when telemetry is
+disabled), `{ type: "session_error", sessionId, error }`, and
+`{ type: "sessions_changed" }` (broadcast to every connected client on
+create/delete/rename).
 
 Requests: `sessions.list`, `sessions.create`, `sessions.resume`, `sessions.delete`,
 `session.attach` (returns full serialized state: messages, model, thinking level,
@@ -214,6 +217,20 @@ Design points:
   log bodies, where cardinality is free.
 - Telemetry is on by default and switched off with `PI_REMOTE_TELEMETRY=false`
   (`telemetry` in the config file), which removes the route and silences the logs.
+- **The UI status bar rides the same accounting.** `Telemetry` optionally emits
+  `TelemetrySnapshot`s (phase, TTFT, elapsed, token counts, tok/s, cache-hit ratio,
+  outcome) through an `onSnapshot` hook; `main.ts` forwards them to attached WS
+  clients as `session_telemetry` pushes via `SessionHost.pushToAttached`. Emission
+  points: turn start, first token, every assistant `message_end`, turn end, and a
+  500 ms-throttled tick during streaming. Providers only report `usage` at
+  `message_end`, so mid-message `completionTokens` adds an estimate from streamed
+  delta characters (~4 chars/token) that snaps to the reported count at each message
+  boundary — the displayed tok/s stays live on long single messages without a second
+  accounting path. `session.attach` serves the latest snapshot (recomputed live if a
+  turn is running) so reconnecting clients render stats immediately. Turn *activity*
+  (thinking vs writing vs which tool is running) is presentation state derived
+  client-side from the raw events the frontend already consumes; the snapshot carries
+  only the measured numbers.
 
 ## Security / trust boundary
 

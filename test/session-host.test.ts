@@ -120,6 +120,33 @@ describe("SessionHost", () => {
     expect(clientB.received).toHaveLength(1);
   });
 
+  it("pushToAttached delivers only to clients attached to that session", async () => {
+    const fakeA = new FakeSession("s1");
+    const fakeB = new FakeSession("s2");
+    const { host } = makeHost(
+      new Map([
+        ["ws-a", fakeA],
+        ["ws-b", fakeB],
+      ]),
+    );
+    await host.createSession("ws-a", undefined);
+    await host.createSession("ws-b", undefined);
+    const clientA = new Recorder();
+    const clientB = new Recorder();
+    host.attach("s1", clientA);
+    host.attach("s2", clientB);
+
+    const payload = { type: "session_telemetry", sessionId: "s1", telemetry: { phase: "waiting" } };
+    host.pushToAttached("s1", payload);
+    expect(clientA.received).toEqual([payload]);
+    expect(clientB.received).toHaveLength(0);
+    expect(() => host.pushToAttached("nope", payload)).not.toThrow();
+
+    host.detach("s1", clientA);
+    host.pushToAttached("s1", payload);
+    expect(clientA.received).toHaveLength(1);
+  });
+
   it("routes prompt to steer while the session is streaming", async () => {
     const fake = new FakeSession("s1");
     const { host } = makeHost(new Map([["ws-a", fake]]));

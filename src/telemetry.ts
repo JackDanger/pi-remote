@@ -1,8 +1,8 @@
 import { Counter, Gauge, Histogram, MetricsRegistry } from "./metrics.js";
+import type { TelemetrySnapshot, TurnOutcome, TurnPhase } from "./protocol.js";
 
 export type PromptKind = "prompt" | "steer" | "followup";
 
-/** Hooks SessionHost invokes so turn accounting can ride the existing event fan-out. */
 export interface SessionObserver {
   promptSent(sessionId: string, kind: PromptKind, model: string): void;
   modelSwitched(sessionId: string, from: string, to: string): void;
@@ -15,11 +15,14 @@ export interface TelemetryDeps {
   now?: () => number;
   wallClock?: () => string;
   emitLog?: (line: string) => void;
+  onSnapshot?: (sessionId: string, snapshot: TelemetrySnapshot) => void;
 }
 
 const TTFT_BUCKETS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 240];
 const DURATION_BUCKETS = [0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1200];
 const CACHE_RATIO_BUCKETS = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1];
+const STREAMING_SNAPSHOT_INTERVAL_MS = 500;
+const ESTIMATED_CHARS_PER_TOKEN = 4;
 
 interface UsageLike {
   input: number;
@@ -44,6 +47,8 @@ interface ActiveTurn {
   promptTokens: number;
   cachedTokens: number;
   completionTokens: number;
+  streamedCharsSinceUsage: number;
+  lastSnapshotAt: number;
   lastStopReason?: string;
 }
 
@@ -51,6 +56,7 @@ interface SessionTelemetryState {
   nextSeq: number;
   pendingPromptAt?: number;
   turn?: ActiveTurn;
+  lastFinalSnapshot?: TelemetrySnapshot;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,7 +82,7 @@ function asUsage(value: unknown): UsageLike | undefined {
   return { input, output, cacheRead, cacheWrite };
 }
 
-function outcomeOf(stopReason: string | undefined): "ok" | "error" | "aborted" {
+function outcomeOf(stopReason: string | undefined): TurnOutcome {
   if (stopReason === "error") return "error";
   if (stopReason === "aborted") return "aborted";
   return "ok";
@@ -87,20 +93,75 @@ function round(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
-/**
- * Per-turn observability: Prometheus metrics (rendered by `renderMetrics`) plus
- * single-line JSON logs for prompt / first_token / model_switch / turn events.
- *
- * A "turn" is one full agent run: prompt accepted → `agent_end`. Token counts are
- * summed across every assistant message in the run; TTFT is prompt-accepted to the
- * first streamed assistant content event.
- */
+function cacheHitRatioOf(turn: ActiveTurn): number | null {
+  const promptDenominator = turn.promptTokens + turn.cachedTokens;
+  return promptDenominator > 0 ? round(turn.cachedTokens / promptDenominator, 3) : null;
+}
+
+function estimatedTokens(streamedChars: number): number {
+  return Math.round(streamedChars / ESTIMATED_CHARS_PER_TOKEN);
+}
+
+function adoptReportedModel(turn: ActiveTurn, message: unknown): void {
+  const assistant = asAssistantMessage(message);
+  if (assistant && typeof assistant.provider === "string" && typeof assistant.model === "string") {
+    turn.model = `${assistant.provider}/${assistant.model}`;
+  }
+}
+
+interface TurnReading {
+  phase: TurnPhase;
+  at: number;
+  completionTokens: number;
+  decodeStartedAt: number | undefined;
+  outcome: TurnOutcome | null;
+}
+
+function liveReading(turn: ActiveTurn, at: number): TurnReading {
+  return {
+    phase: turn.firstTokenAt === undefined ? "waiting" : "responding",
+    at,
+    completionTokens: turn.completionTokens + estimatedTokens(turn.streamedCharsSinceUsage),
+    decodeStartedAt: turn.firstTokenAt,
+    outcome: null,
+  };
+}
+
+function finishedReading(turn: ActiveTurn, endedAt: number, outcome: TurnOutcome): TurnReading {
+  return {
+    phase: "idle",
+    at: endedAt,
+    completionTokens: turn.completionTokens,
+    decodeStartedAt: turn.firstTokenAt ?? turn.startedAt,
+    outcome,
+  };
+}
+
+function snapshotOf(turn: ActiveTurn, reading: TurnReading): TelemetrySnapshot {
+  const decodeSeconds = reading.decodeStartedAt !== undefined ? (reading.at - reading.decodeStartedAt) / 1000 : 0;
+  return {
+    phase: reading.phase,
+    turnSeq: turn.seq,
+    model: turn.model,
+    elapsedMs: Math.round(reading.at - turn.startedAt),
+    ttftMs: turn.firstTokenAt !== undefined ? Math.round(turn.firstTokenAt - turn.startedAt) : null,
+    promptTokens: turn.promptTokens,
+    cachedTokens: turn.cachedTokens,
+    completionTokens: reading.completionTokens,
+    tokensPerSec:
+      decodeSeconds > 0 && reading.completionTokens > 0 ? round(reading.completionTokens / decodeSeconds, 2) : null,
+    cacheHitRatio: cacheHitRatioOf(turn),
+    outcome: reading.outcome,
+  };
+}
+
 export class Telemetry implements SessionObserver {
   private readonly registry = new MetricsRegistry();
   private readonly sessions = new Map<string, SessionTelemetryState>();
   private readonly now: () => number;
   private readonly wallClock: () => string;
   private readonly emitLog: (line: string) => void;
+  private readonly onSnapshot?: (sessionId: string, snapshot: TelemetrySnapshot) => void;
 
   private readonly promptTokens = this.registry.register(
     new Counter(
@@ -151,6 +212,7 @@ export class Telemetry implements SessionObserver {
     this.now = deps.now ?? (() => performance.now());
     this.wallClock = deps.wallClock ?? (() => new Date().toISOString());
     this.emitLog = deps.emitLog ?? ((line) => console.log(line));
+    this.onSnapshot = deps.onSnapshot;
     this.registry.register(
       new Gauge("pi_remote_live_sessions", "Sessions currently hosted in-process.", deps.liveSessions),
     );
@@ -161,6 +223,12 @@ export class Telemetry implements SessionObserver {
 
   renderMetrics(): string {
     return this.registry.render();
+  }
+
+  snapshot(sessionId: string): TelemetrySnapshot | undefined {
+    const state = this.sessions.get(sessionId);
+    if (!state) return undefined;
+    return state.turn ? snapshotOf(state.turn, liveReading(state.turn, this.now())) : state.lastFinalSnapshot;
   }
 
   promptSent(sessionId: string, kind: PromptKind, model: string): void {
@@ -181,6 +249,7 @@ export class Telemetry implements SessionObserver {
         return;
       case "message_update":
         this.observeFirstToken(sessionId, event);
+        this.observeStreamProgress(sessionId, event);
         return;
       case "message_end":
         this.accumulateUsage(sessionId, event.message);
@@ -209,8 +278,11 @@ export class Telemetry implements SessionObserver {
       promptTokens: 0,
       cachedTokens: 0,
       completionTokens: 0,
+      streamedCharsSinceUsage: 0,
+      lastSnapshotAt: 0,
     };
     state.pendingPromptAt = undefined;
+    this.emitSnapshot(sessionId, state.turn);
   }
 
   private observeFirstToken(sessionId: string, event: Record<string, unknown>): void {
@@ -221,7 +293,8 @@ export class Telemetry implements SessionObserver {
     if (isRecord(streamEvent) && streamEvent.type === "start") return;
     turn.firstTokenAt = this.now();
     const ttftSeconds = (turn.firstTokenAt - turn.startedAt) / 1000;
-    this.ttftSeconds.observe({ model: this.turnModel(turn, event.message) }, ttftSeconds);
+    adoptReportedModel(turn, event.message);
+    this.ttftSeconds.observe({ model: turn.model }, ttftSeconds);
     this.log({
       event: "first_token",
       session_id: sessionId,
@@ -229,6 +302,18 @@ export class Telemetry implements SessionObserver {
       turn_seq: turn.seq,
       ttft_ms: Math.round(ttftSeconds * 1000),
     });
+    this.emitSnapshot(sessionId, turn);
+  }
+
+  private observeStreamProgress(sessionId: string, event: Record<string, unknown>): void {
+    const turn = this.sessions.get(sessionId)?.turn;
+    if (!turn || !asAssistantMessage(event.message)) return;
+    const streamEvent = event.assistantMessageEvent;
+    if (!isRecord(streamEvent) || typeof streamEvent.delta !== "string") return;
+    turn.streamedCharsSinceUsage += streamEvent.delta.length;
+    if (this.now() - turn.lastSnapshotAt >= STREAMING_SNAPSHOT_INTERVAL_MS) {
+      this.emitSnapshot(sessionId, turn);
+    }
   }
 
   private accumulateUsage(sessionId: string, message: unknown): void {
@@ -238,13 +323,15 @@ export class Telemetry implements SessionObserver {
     turn.lastStopReason = typeof assistant.stopReason === "string" ? assistant.stopReason : turn.lastStopReason;
     const usage = asUsage(assistant.usage);
     if (!usage) return;
-    const model = this.turnModel(turn, message);
+    adoptReportedModel(turn, message);
     turn.promptTokens += usage.input;
     turn.cachedTokens += usage.cacheRead;
     turn.completionTokens += usage.output;
-    this.promptTokens.inc({ model }, usage.input);
-    this.cachedTokens.inc({ model }, usage.cacheRead);
-    this.completionTokens.inc({ model }, usage.output);
+    turn.streamedCharsSinceUsage = 0;
+    this.promptTokens.inc({ model: turn.model }, usage.input);
+    this.cachedTokens.inc({ model: turn.model }, usage.cacheRead);
+    this.completionTokens.inc({ model: turn.model }, usage.output);
+    this.emitSnapshot(sessionId, turn);
   }
 
   private finishTurn(sessionId: string): void {
@@ -253,16 +340,14 @@ export class Telemetry implements SessionObserver {
     if (!state || !turn) return;
     state.turn = undefined;
     const endedAt = this.now();
-    const durationSeconds = (endedAt - turn.startedAt) / 1000;
     const outcome = outcomeOf(turn.lastStopReason);
-    this.durationSeconds.observe({ model: turn.model }, durationSeconds);
+    this.durationSeconds.observe({ model: turn.model }, (endedAt - turn.startedAt) / 1000);
     this.turnsTotal.inc({ model: turn.model, outcome });
     const promptDenominator = turn.promptTokens + turn.cachedTokens;
     if (promptDenominator > 0) {
       this.cacheHitRatio.observe({ model: turn.model }, turn.cachedTokens / promptDenominator);
     }
-    const ttftMs = turn.firstTokenAt !== undefined ? turn.firstTokenAt - turn.startedAt : undefined;
-    const decodeSeconds = (endedAt - (turn.firstTokenAt ?? turn.startedAt)) / 1000;
+    const finalSnapshot = snapshotOf(turn, finishedReading(turn, endedAt, outcome));
     this.log({
       event: "turn",
       session_id: sessionId,
@@ -271,19 +356,19 @@ export class Telemetry implements SessionObserver {
       prompt_tokens: turn.promptTokens,
       cached_tokens: turn.cachedTokens,
       completion_tokens: turn.completionTokens,
-      ttft_ms: ttftMs !== undefined ? Math.round(ttftMs) : null,
-      duration_ms: Math.round(durationSeconds * 1000),
-      tokens_per_sec: decodeSeconds > 0 ? round(turn.completionTokens / decodeSeconds, 2) : null,
+      ttft_ms: finalSnapshot.ttftMs,
+      duration_ms: finalSnapshot.elapsedMs,
+      tokens_per_sec: finalSnapshot.tokensPerSec,
       outcome,
     });
+    state.lastFinalSnapshot = finalSnapshot;
+    this.onSnapshot?.(sessionId, finalSnapshot);
   }
 
-  private turnModel(turn: ActiveTurn, message: unknown): string {
-    const assistant = asAssistantMessage(message);
-    if (assistant && typeof assistant.provider === "string" && typeof assistant.model === "string") {
-      turn.model = `${assistant.provider}/${assistant.model}`;
-    }
-    return turn.model;
+  private emitSnapshot(sessionId: string, turn: ActiveTurn): void {
+    if (!this.onSnapshot) return;
+    turn.lastSnapshotAt = this.now();
+    this.onSnapshot(sessionId, snapshotOf(turn, liveReading(turn, turn.lastSnapshotAt)));
   }
 
   private log(fields: Record<string, unknown>): void {

@@ -120,6 +120,30 @@ export interface SessionEventPush {
   event: unknown;
 }
 
+export type TurnPhase = "waiting" | "responding" | "idle";
+
+export type TurnOutcome = "ok" | "error" | "aborted";
+
+export interface TelemetrySnapshot {
+  phase: TurnPhase;
+  turnSeq: number;
+  model: string;
+  elapsedMs: number;
+  ttftMs: number | null;
+  promptTokens: number;
+  cachedTokens: number;
+  completionTokens: number;
+  tokensPerSec: number | null;
+  cacheHitRatio: number | null;
+  outcome: TurnOutcome | null;
+}
+
+export interface SessionTelemetryPush {
+  type: "session_telemetry";
+  sessionId: string;
+  telemetry: TelemetrySnapshot;
+}
+
 export interface SessionErrorPush {
   type: "session_error";
   sessionId: string;
@@ -130,4 +154,4 @@ export interface SessionsChangedPush {
   type: "sessions_changed";
 }
 
-export type ServerPush = SessionEventPush | SessionErrorPush | SessionsChangedPush;
+export type ServerPush = SessionEventPush | SessionTelemetryPush | SessionErrorPush | SessionsChangedPush;

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { createPiEnvironment } from "./pi.js";
+import type { SessionTelemetryPush } from "./protocol.js";
 import { SessionHost } from "./session-host.js";
 import { startServer } from "./server.js";
 import { Telemetry } from "./telemetry.js";
@@ -13,6 +14,10 @@ const telemetry: Telemetry | undefined = config.telemetry
   ? new Telemetry({
       liveSessions: () => sessionHost.liveSessionIds().length,
       streamingSessions: () => sessionHost.streamingSessionIds().length,
+      onSnapshot: (sessionId, snapshot) => {
+        const push: SessionTelemetryPush = { type: "session_telemetry", sessionId, telemetry: snapshot };
+        sessionHost.pushToAttached(sessionId, push);
+      },
     })
   : undefined;
 const sessionHost: SessionHost = new SessionHost(environment.hostDeps, telemetry);
@@ -29,6 +34,7 @@ const server = startServer({
   workspaceRoot: environment.workspaceRoot,
   webRoot,
   renderMetrics: telemetry ? () => telemetry.renderMetrics() : undefined,
+  latestTelemetry: telemetry ? (sessionId) => telemetry.snapshot(sessionId) : undefined,
 });
 
 server.on("listening", () => {

@@ -3,7 +3,13 @@ import http from "node:http";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ImageContent, ModelSnapshot, SessionHost } from "./session-host.js";
-import { type ClientRequest, type ImageAttachment, parseClientRequest, ProtocolError } from "./protocol.js";
+import {
+  type ClientRequest,
+  type ImageAttachment,
+  parseClientRequest,
+  ProtocolError,
+  type TelemetrySnapshot,
+} from "./protocol.js";
 
 export interface ServerOptions {
   host: string;
@@ -13,6 +19,7 @@ export interface ServerOptions {
   workspaceRoot: string;
   webRoot: string;
   renderMetrics?: () => string;
+  latestTelemetry?: (sessionId: string) => TelemetrySnapshot | undefined;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -68,8 +75,11 @@ async function dispatch(
       await sessionHost.deleteSession(request.path);
       sessionsChanged();
       return {};
-    case "session.attach":
-      return sessionHost.attach(request.sessionId, client);
+    case "session.attach": {
+      const state = sessionHost.attach(request.sessionId, client);
+      const telemetry = options.latestTelemetry?.(request.sessionId);
+      return telemetry ? { ...state, telemetry } : state;
+    }
     case "session.detach":
       sessionHost.detach(request.sessionId, client);
       return {};
