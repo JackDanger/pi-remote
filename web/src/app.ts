@@ -1,4 +1,5 @@
 import { escapeHtml, renderMarkdown } from "./markdown.js";
+import { ConnectionLostError, Rpc, type ConnState, type SocketLike } from "./rpc.js";
 import {
   activityForAssistantEvent,
   finishedTurnStats,
@@ -72,99 +73,6 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const OUTPUT_PREVIEW_CHARS = 3000;
 const MAX_IMAGE_DIMENSION = 1568;
 
-type ConnState = "connecting" | "online" | "offline";
-
-class Rpc {
-  private socket?: WebSocket;
-  private nextId = 1;
-  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: number }>();
-  private backoffMs = 500;
-  private reconnectTimer?: number;
-  private pingTimer?: number;
-  onPush: (msg: Record<string, unknown>) => void = () => {};
-  onStateChange: (state: ConnState) => void = () => {};
-
-  connect(): void {
-    if (this.reconnectTimer !== undefined) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
-    this.onStateChange("connecting");
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${proto}://${location.host}${location.pathname.replace(/\/$/, "")}/ws`);
-    this.socket = socket;
-    socket.onopen = () => {
-      this.backoffMs = 500;
-      this.onStateChange("online");
-      this.startPing();
-    };
-    socket.onmessage = (ev) => {
-      const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
-      if (typeof msg.id === "number" && this.pending.has(msg.id)) {
-        const entry = this.pending.get(msg.id)!;
-        this.pending.delete(msg.id);
-        clearTimeout(entry.timer);
-        if (msg.ok) entry.resolve(msg.result);
-        else entry.reject(new Error(String(msg.error)));
-        return;
-      }
-      this.onPush(msg);
-    };
-    socket.onclose = () => {
-      if (this.socket !== socket) return;
-      this.stopPing();
-      this.onStateChange("offline");
-      for (const entry of this.pending.values()) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error("Connection lost"));
-      }
-      this.pending.clear();
-      this.reconnectTimer = window.setTimeout(() => this.connect(), this.backoffMs);
-      this.backoffMs = Math.min(this.backoffMs * 2, 8000);
-    };
-  }
-
-  kick(): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
-    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) return;
-    this.backoffMs = 500;
-    this.connect();
-  }
-
-  get connected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
-  }
-
-  request<T>(type: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<T> {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("Not connected"));
-    }
-    const id = this.nextId++;
-    this.socket.send(JSON.stringify({ id, type, ...params }));
-    return new Promise<T>((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Request ${type} timed out`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-    });
-  }
-
-  private startPing(): void {
-    this.stopPing();
-    this.pingTimer = window.setInterval(() => {
-      if (this.connected) void this.request("ping", {}, 10000).catch(() => {});
-    }, 25000);
-  }
-
-  private stopPing(): void {
-    if (this.pingTimer !== undefined) {
-      clearInterval(this.pingTimer);
-      this.pingTimer = undefined;
-    }
-  }
-}
-
 interface ChatState {
   summary: SessionSummary;
   messages: ChatMessage[];
@@ -180,8 +88,12 @@ interface ChatState {
   turnStartedAt?: number;
 }
 
-const rpc = new Rpc();
+const rpc = new Rpc(() => {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return new WebSocket(`${proto}://${location.host}${location.pathname.replace(/\/$/, "")}/ws`) as unknown as SocketLike;
+});
 let view: "list" | "chat" = "list";
+let unconfirmedOutbound: { sessionId: string; text: string; startsTurn: boolean } | undefined;
 let chat: ChatState | undefined;
 let models: ModelSnapshot[] = [];
 let workspaceRoot = "";
@@ -361,7 +273,7 @@ function renderSessionCards(sessions: SessionSummary[]): void {
         if (s.active) {
           await openChat(s.sessionId);
         } else if (s.path) {
-          const { session } = await rpc.request<{ session: SessionSummary }>("sessions.resume", { path: s.path }, 60000);
+          const { session } = await rpc.request<{ session: SessionSummary }>("sessions.resume", { path: s.path });
           await openChat(session.sessionId);
         }
       } catch (error) {
@@ -401,11 +313,10 @@ function openNewSessionSheet(): void {
       const workspace = (body.querySelector("input[name=workspace]") as HTMLInputElement).value.trim();
       const model = (body.querySelector("select[name=model]") as HTMLSelectElement).value;
       try {
-        const { session } = await rpc.request<{ session: SessionSummary }>(
-          "sessions.create",
-          { ...(workspace ? { workspace } : {}), ...(model ? { model } : {}) },
-          60000,
-        );
+        const { session } = await rpc.request<{ session: SessionSummary }>("sessions.create", {
+          ...(workspace ? { workspace } : {}),
+          ...(model ? { model } : {}),
+        });
         close();
         await openChat(session.sessionId);
       } catch (error) {
@@ -418,7 +329,7 @@ function openNewSessionSheet(): void {
 }
 
 async function openChat(sessionId: string): Promise<void> {
-  const state = await rpc.request<AttachState>("session.attach", { sessionId }, 60000);
+  const state = await rpc.request<AttachState>("session.attach", { sessionId });
   view = "chat";
   chat = {
     summary: state.summary,
@@ -707,17 +618,22 @@ async function sendPrompt(): Promise<void> {
   const optimisticNode = messageNode(optimistic, -1);
   appendNode(optimisticNode, { optimistic: true });
   if (freshRun) {
-    statusRow("awaiting", "Waiting for the model — the first message can take a while if the model has to load.");
+    statusRow("awaiting", "Waiting for the model — big local models can take several minutes before the first token.");
     chat.turnStartedAt = Date.now();
   }
   scrollLogToBottom(true);
+  const sessionId = chat.summary.sessionId;
   try {
     await rpc.request(type, {
-      sessionId: chat.summary.sessionId,
+      sessionId,
       text,
       ...(images.length ? { images } : {}),
     });
   } catch (error) {
+    if (error instanceof ConnectionLostError && error.sentBeforeLoss) {
+      unconfirmedOutbound = { sessionId, text, startsTurn: freshRun };
+      return;
+    }
     optimisticNode?.remove();
     if (freshRun) removeStatusRow("awaiting");
     const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
@@ -726,7 +642,11 @@ async function sendPrompt(): Promise<void> {
       chat.attachments = images;
       renderAttachStrip();
     }
-    toast(String((error as Error).message));
+    if (error instanceof ConnectionLostError) {
+      toast("Offline — your message wasn't sent; it's back in the composer", "info");
+    } else {
+      toast(String((error as Error).message));
+    }
   }
 }
 
@@ -1211,12 +1131,35 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
 
 async function attachWithResume(sessionId: string, path: string | undefined): Promise<AttachState> {
   try {
-    return await rpc.request<AttachState>("session.attach", { sessionId }, 60000);
+    return await rpc.request<AttachState>("session.attach", { sessionId });
   } catch (error) {
     if (!path) throw error;
-    const { session } = await rpc.request<{ session: SessionSummary }>("sessions.resume", { path }, 60000);
-    return await rpc.request<AttachState>("session.attach", { sessionId: session.sessionId }, 60000);
+    const { session } = await rpc.request<{ session: SessionSummary }>("sessions.resume", { path });
+    return await rpc.request<AttachState>("session.attach", { sessionId: session.sessionId });
   }
+}
+
+function recentUserMessageMatches(messages: ChatMessage[], text: string): boolean {
+  return messages.slice(-10).some((m) => m.role === "user" && contentText(m.content).trim() === text.trim());
+}
+
+function reconcileUnconfirmedOutbound(sessionId: string, state: AttachState): void {
+  if (!unconfirmedOutbound || unconfirmedOutbound.sessionId !== sessionId) return;
+  const pending = unconfirmedOutbound;
+  unconfirmedOutbound = undefined;
+  const delivered =
+    (pending.startsTurn && state.summary.streaming) || recentUserMessageMatches(state.messages, pending.text);
+  if (delivered) return;
+  ui.main.querySelector('[data-optimistic="1"]')?.remove();
+  removeStatusRow("awaiting");
+  const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+  if (input && !input.value) input.value = pending.text;
+  toast(
+    pending.startsTurn
+      ? "Reconnected — your message didn't reach the server; it's back in the composer"
+      : "Reconnected — couldn't confirm your note was delivered; it's back in the composer just in case",
+    "info",
+  );
 }
 
 async function resyncChat(sessionId: string, options: { trustServerStreaming?: boolean } = {}): Promise<void> {
@@ -1234,6 +1177,7 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
       chat.telemetry = state.telemetry;
       chat.telemetryReceivedAt = Date.now();
     }
+    reconcileUnconfirmedOutbound(sessionId, state);
     if (!chat.streaming) {
       chat.turnStartedAt = undefined;
       chat.activity = { kind: "idle" };
