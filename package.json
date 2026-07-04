@@ -27,7 +27,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "@earendil-works/pi-coding-agent": "file:vendor/earendil-works-pi-coding-agent-0.80.3.tgz",
     "ws": "^8.18.0"
   },
   "devDependencies": {

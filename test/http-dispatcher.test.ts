@@ -1,38 +1,32 @@
 import fs from "node:fs";
+import { configureHttpDispatcher, DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { applyHttpIdleTimeout, formatHttpIdleTimeout, loadHttpDispatcherModule } from "../src/http-dispatcher.js";
+import { applyHttpIdleTimeout, formatHttpIdleTimeout } from "../src/http-dispatcher.js";
 
 describe("applyHttpIdleTimeout", () => {
-  it("passes the resolved timeout to configureHttpDispatcher", async () => {
-    const configureHttpDispatcher = vi.fn();
-    await applyHttpIdleTimeout(1_800_000, async () => ({ configureHttpDispatcher }));
-    expect(configureHttpDispatcher).toHaveBeenCalledTimes(1);
-    expect(configureHttpDispatcher).toHaveBeenCalledWith(1_800_000);
+  it("passes the resolved timeout to configureHttpDispatcher", () => {
+    const configure = vi.fn();
+    applyHttpIdleTimeout(1_800_000, configure);
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(configure).toHaveBeenCalledWith(1_800_000);
   });
 
-  it("passes zero through for a disabled timeout", async () => {
-    const configureHttpDispatcher = vi.fn();
-    await applyHttpIdleTimeout(0, async () => ({ configureHttpDispatcher }));
-    expect(configureHttpDispatcher).toHaveBeenCalledTimes(1);
-    expect(configureHttpDispatcher).toHaveBeenCalledWith(0);
+  it("passes zero through for a disabled timeout", () => {
+    const configure = vi.fn();
+    applyHttpIdleTimeout(0, configure);
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(configure).toHaveBeenCalledWith(0);
+  });
+
+  it("defaults to the pi engine's configureHttpDispatcher exported from the package root", () => {
+    expect(typeof configureHttpDispatcher).toBe("function");
+    applyHttpIdleTimeout(1_800_000);
   });
 });
 
-describe("loadHttpDispatcherModule", () => {
-  it("reaches the real pi module even though the package exports map hides it", async () => {
-    const dispatcherModule = await loadHttpDispatcherModule();
-    expect(typeof dispatcherModule.configureHttpDispatcher).toBe("function");
-  });
-
-  it("targets a pi library whose default idle timeout would kill slow-prefill turns", async () => {
-    const dispatcherModule = (await loadHttpDispatcherModule()) as { DEFAULT_HTTP_IDLE_TIMEOUT_MS?: number } & Awaited<
-      ReturnType<typeof loadHttpDispatcherModule>
-    >;
-    expect(dispatcherModule.DEFAULT_HTTP_IDLE_TIMEOUT_MS).toBe(300_000);
-  });
-
-  it("applies a real timeout end to end without throwing", async () => {
-    await applyHttpIdleTimeout(1_800_000);
+describe("pi engine http-dispatcher export", () => {
+  it("exposes a default idle timeout that would kill slow-prefill turns", () => {
+    expect(DEFAULT_HTTP_IDLE_TIMEOUT_MS).toBe(300_000);
   });
 });
 
