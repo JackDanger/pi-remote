@@ -1,3 +1,4 @@
+import { gateCompact, parseCompactCommand } from "./compact-command.js";
 import { escapeHtml, renderMarkdown } from "./markdown.js";
 import { ConnectionLostError, Rpc, type ConnState, type SocketLike } from "./rpc.js";
 import {
@@ -79,6 +80,7 @@ interface ChatState {
   model?: ModelSnapshot;
   thinkingLevel: string;
   streaming: boolean;
+  compacting: boolean;
   deliverMode: "steer" | "followup";
   attachments: ImageAttachment[];
   queuedNotes: string[];
@@ -337,6 +339,7 @@ async function openChat(sessionId: string): Promise<void> {
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     streaming: state.summary.streaming,
+    compacting: false,
     deliverMode: "steer",
     attachments: [],
     queuedNotes: [],
@@ -600,6 +603,14 @@ async function sendPrompt(): Promise<void> {
   const text = textarea.value.trim();
   const images = chat.attachments.slice();
   if (!text && images.length === 0) return;
+  const compactCommand = parseCompactCommand(text);
+  if (compactCommand) {
+    textarea.value = "";
+    textarea.style.height = "auto";
+    updateSendEnabled();
+    await sendCompact(compactCommand.instructions);
+    return;
+  }
   textarea.value = "";
   textarea.style.height = "auto";
   chat.attachments = [];
@@ -647,6 +658,26 @@ async function sendPrompt(): Promise<void> {
     } else {
       toast(String((error as Error).message));
     }
+  }
+}
+
+async function sendCompact(instructions?: string): Promise<void> {
+  if (!chat) return;
+  const gate = gateCompact(chat.streaming, chat.compacting);
+  if (!gate.allowed) {
+    toast(gate.reason, "info");
+    return;
+  }
+  chat.compacting = true;
+  try {
+    await rpc.request("session.compact", {
+      sessionId: chat.summary.sessionId,
+      ...(instructions ? { instructions } : {}),
+    });
+    toast("compacting…", "info");
+  } catch (error) {
+    if (chat) chat.compacting = false;
+    toast(String((error as Error).message));
   }
 }
 
@@ -1119,9 +1150,11 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
       }
       break;
     case "compaction_start":
+      chat.compacting = true;
       statusRow("compaction", "compacting context…");
       break;
     case "compaction_end":
+      chat.compacting = false;
       removeStatusRow("compaction");
       break;
     default:
@@ -1173,6 +1206,7 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
     chat.model = state.model;
     chat.thinkingLevel = state.thinkingLevel;
     if (options.trustServerStreaming !== false) chat.streaming = state.summary.streaming;
+    if (ui.main.querySelector('[data-status="compaction"]') === null) chat.compacting = false;
     if (state.telemetry) {
       chat.telemetry = state.telemetry;
       chat.telemetryReceivedAt = Date.now();

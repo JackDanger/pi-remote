@@ -23,6 +23,8 @@ class FakeSession implements HostableSession {
   steerImages: ImageContent[][] = [];
   followUps: string[] = [];
   aborted = 0;
+  compacts: (string | undefined)[] = [];
+  compactError: Error | undefined = undefined;
   private listeners = new Set<(event: unknown) => void>();
 
   constructor(id: string, file?: string) {
@@ -55,6 +57,12 @@ class FakeSession implements HostableSession {
 
   async abort(): Promise<void> {
     this.aborted++;
+  }
+
+  async compact(instructions?: string): Promise<unknown> {
+    if (this.compactError) throw this.compactError;
+    this.compacts.push(instructions);
+    return { summary: "compacted" };
   }
 
   setThinkingLevel(level: never): void {
@@ -172,6 +180,39 @@ describe("SessionHost", () => {
     fake.isStreaming = true;
     host.prompt("s1", "and this", images);
     expect(fake.steerImages).toEqual([images]);
+  });
+
+  it("compacts a live session, passing instructions through", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    host.compact("s1");
+    host.compact("s1", "keep the migration plan");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fake.compacts).toEqual([undefined, "keep the migration plan"]);
+  });
+
+  it("throws SessionNotFoundError when compacting an unknown session", () => {
+    const { host } = makeHost(new Map());
+    expect(() => host.compact("ghost")).toThrow(SessionNotFoundError);
+  });
+
+  it("broadcasts a session_error to attached clients when compaction fails", async () => {
+    const fake = new FakeSession("s1");
+    fake.compactError = new Error("Compaction failed: boom");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    const client = new Recorder();
+    host.attach("s1", client);
+
+    host.compact("s1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.received).toEqual([
+      { type: "session_error", sessionId: "s1", error: "Compaction failed: boom" },
+    ]);
   });
 
   it("renames a live session", async () => {
@@ -322,6 +363,7 @@ describe("SessionHost.drain", () => {
     expect(() => host.prompt("s1", "new work")).toThrow(ServerDrainingError);
     expect(() => host.steer("s1", "new steer")).toThrow(ServerDrainingError);
     expect(() => host.followUp("s1", "new followup")).toThrow(ServerDrainingError);
+    expect(() => host.compact("s1")).toThrow(ServerDrainingError);
     await expect(host.createSession("ws-a", undefined)).rejects.toThrow(ServerDrainingError);
     await expect(host.resumeSession("/sessions/other.jsonl")).rejects.toThrow(ServerDrainingError);
     expect(fake.prompts).toEqual([]);

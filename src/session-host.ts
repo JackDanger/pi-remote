@@ -26,6 +26,7 @@ export interface HostableSession {
   steer(text: string, images?: ImageContent[]): Promise<void>;
   followUp(text: string, images?: ImageContent[]): Promise<void>;
   abort(): Promise<void>;
+  compact(instructions?: string): Promise<unknown>;
   setThinkingLevel(level: never): void;
   setSessionName(name: string): void;
   dispose(): void;
@@ -255,6 +256,12 @@ export class SessionHost {
 
   async abort(sessionId: string): Promise<void> {
     await this.mustGetLive(sessionId).session.abort();
+  }
+
+  compact(sessionId: string, instructions?: string): void {
+    this.rejectNewWorkWhileDraining();
+    const entry = this.mustGetLive(sessionId);
+    entry.session.compact(instructions).catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
   async setModel(sessionId: string, provider: string, modelId: string): Promise<ModelSnapshot | undefined> {

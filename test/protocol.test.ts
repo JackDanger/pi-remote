@@ -72,6 +72,27 @@ describe("parseClientRequest", () => {
     ).toThrow(/requires string field "text"/);
   });
 
+  it("accepts session.compact with and without instructions", () => {
+    expect(parseClientRequest(JSON.stringify({ id: 10, type: "session.compact", sessionId: "s" }))).toMatchObject({
+      type: "session.compact",
+      sessionId: "s",
+    });
+    expect(
+      parseClientRequest(
+        JSON.stringify({ id: 11, type: "session.compact", sessionId: "s", instructions: "keep the plan" }),
+      ),
+    ).toMatchObject({ type: "session.compact", sessionId: "s", instructions: "keep the plan" });
+  });
+
+  it("rejects session.compact without a sessionId", () => {
+    expect(() => parseClientRequest(JSON.stringify({ id: 12, type: "session.compact" }))).toThrow(
+      /requires string field "sessionId"/,
+    );
+    expect(() => parseClientRequest(JSON.stringify({ id: 13, type: "session.compact", sessionId: "" }))).toThrow(
+      /requires string field "sessionId"/,
+    );
+  });
+
   it("rejects missing required fields", () => {
     expect(() => parseClientRequest(JSON.stringify({ id: 1, type: "session.prompt", sessionId: "s" }))).toThrow(
       /requires string field "text"/,
