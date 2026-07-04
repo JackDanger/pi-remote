@@ -110,6 +110,7 @@ Environment variables override the config file
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings default, else first available | `provider/model-id` for new sessions |
 | `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | on SIGTERM/SIGINT, how long to wait for in-flight agent turns to finish before force-stopping them |
 | `PI_REMOTE_TELEMETRY` | `telemetry` | `true` | Prometheus `/metrics` endpoint + structured per-turn JSON logs (see Observability) |
+| `PI_REMOTE_HTTP_IDLE_TIMEOUT_MS` | `httpIdleTimeoutMs` | `1800000` | max time a model HTTP request may go without receiving any bytes before it is aborted (covers time-to-first-token, so it must exceed the slowest model's prefill; Pi's own default is 5 minutes, which kills large local models that take 5–18 min to first token). `0` or `"disabled"` disables the timeout entirely; the finite default means a genuinely wedged upstream still errors out instead of hanging a session forever |
 
 Example `config.json`:
 

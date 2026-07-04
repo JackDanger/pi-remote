@@ -15,9 +15,11 @@ export interface Config {
   defaultModel?: ModelRef;
   shutdownGraceMs: number;
   telemetry: boolean;
+  httpIdleTimeoutMs: number;
 }
 
 export const DEFAULT_SHUTDOWN_GRACE_MS = 120_000;
+export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 1_800_000;
 
 export function parseModelRef(value: string): ModelRef {
   const slash = value.indexOf("/");
@@ -41,6 +43,7 @@ interface ConfigFile {
   defaultModel?: string;
   shutdownGraceMs?: number;
   telemetry?: boolean;
+  httpIdleTimeoutMs?: number | string;
 }
 
 function readConfigFile(filePath: string): ConfigFile {
@@ -66,6 +69,15 @@ function parseNonNegativeMs(value: string | number, source: string): number {
     throw new Error(`Invalid milliseconds value "${value}" from ${source}`);
   }
   return ms;
+}
+
+export function parseHttpIdleTimeoutMs(value: string | number, source: string): number {
+  if (typeof value === "string" && value.trim().toLowerCase() === "disabled") return 0;
+  const ms = typeof value === "number" ? value : Number(value.trim());
+  if (!Number.isFinite(ms) || ms < 0) {
+    throw new Error(`Invalid HTTP idle timeout "${value}" from ${source} (expected non-negative milliseconds or "disabled")`);
+  }
+  return Math.floor(ms);
 }
 
 function parseBoolean(value: string, source: string): boolean {
@@ -100,6 +112,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const telemetry = env.PI_REMOTE_TELEMETRY
     ? parseBoolean(env.PI_REMOTE_TELEMETRY, "PI_REMOTE_TELEMETRY")
     : (file.telemetry ?? true);
+  const httpIdleTimeoutMs = env.PI_REMOTE_HTTP_IDLE_TIMEOUT_MS
+    ? parseHttpIdleTimeoutMs(env.PI_REMOTE_HTTP_IDLE_TIMEOUT_MS, "PI_REMOTE_HTTP_IDLE_TIMEOUT_MS")
+    : file.httpIdleTimeoutMs !== undefined
+      ? parseHttpIdleTimeoutMs(file.httpIdleTimeoutMs, "config file")
+      : DEFAULT_HTTP_IDLE_TIMEOUT_MS;
   return {
     host,
     port,
@@ -108,5 +125,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     defaultModel: defaultModelRaw ? parseModelRef(defaultModelRaw) : undefined,
     shutdownGraceMs,
     telemetry,
+    httpIdleTimeoutMs,
   };
 }

@@ -90,6 +90,34 @@ describe("loadConfig", () => {
     );
   });
 
+  it("defaults the HTTP idle timeout to 30 minutes", () => {
+    expect(loadConfig({ PI_REMOTE_CONFIG: "/nonexistent/config.json" }).httpIdleTimeoutMs).toBe(1_800_000);
+  });
+
+  it("reads the HTTP idle timeout from the config file and lets env override it", () => {
+    const file = withConfigFile({ httpIdleTimeoutMs: 60_000 });
+    expect(loadConfig({ PI_REMOTE_CONFIG: file }).httpIdleTimeoutMs).toBe(60_000);
+    expect(loadConfig({ PI_REMOTE_CONFIG: file, PI_REMOTE_HTTP_IDLE_TIMEOUT_MS: "120000" }).httpIdleTimeoutMs).toBe(
+      120_000,
+    );
+  });
+
+  it("accepts disabled and zero HTTP idle timeouts", () => {
+    expect(loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_HTTP_IDLE_TIMEOUT_MS: "disabled" }).httpIdleTimeoutMs).toBe(0);
+    const file = withConfigFile({ httpIdleTimeoutMs: "disabled" });
+    expect(loadConfig({ PI_REMOTE_CONFIG: file }).httpIdleTimeoutMs).toBe(0);
+    expect(loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_HTTP_IDLE_TIMEOUT_MS: "0" }).httpIdleTimeoutMs).toBe(0);
+  });
+
+  it("rejects invalid HTTP idle timeouts", () => {
+    expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_HTTP_IDLE_TIMEOUT_MS: "soon" })).toThrow(
+      /Invalid HTTP idle timeout/,
+    );
+    expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_HTTP_IDLE_TIMEOUT_MS: "-5" })).toThrow(
+      /Invalid HTTP idle timeout/,
+    );
+  });
+
   it("rejects invalid shutdown grace values", () => {
     expect(() => loadConfig({ PI_REMOTE_CONFIG: "/nonexistent", PI_REMOTE_SHUTDOWN_GRACE_MS: "soon" })).toThrow(
       /Invalid milliseconds/,

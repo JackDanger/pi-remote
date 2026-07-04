@@ -2,6 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { applyHttpIdleTimeout, formatHttpIdleTimeout } from "./http-dispatcher.js";
 import { createPiEnvironment } from "./pi.js";
 import type { SessionTelemetryPush } from "./protocol.js";
 import { SessionHost } from "./session-host.js";
@@ -9,6 +10,8 @@ import { startServer } from "./server.js";
 import { Telemetry } from "./telemetry.js";
 
 const config = loadConfig();
+await applyHttpIdleTimeout(config.httpIdleTimeoutMs);
+console.log(`HTTP idle timeout for model requests: ${formatHttpIdleTimeout(config.httpIdleTimeoutMs)}`);
 const environment = createPiEnvironment(config);
 const telemetry: Telemetry | undefined = config.telemetry
   ? new Telemetry({
