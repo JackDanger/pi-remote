@@ -1,7 +1,7 @@
 import { Counter, Gauge, Histogram, MetricsRegistry } from "./metrics.js";
 import type { TelemetrySnapshot, TurnOutcome, TurnPhase } from "./protocol.js";
 
-export type PromptKind = "prompt" | "steer" | "followup";
+export type PromptKind = "prompt" | "steer" | "followup" | "command";
 
 export interface SessionObserver {
   promptSent(sessionId: string, kind: PromptKind, model: string): void;

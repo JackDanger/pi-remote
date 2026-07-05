@@ -5,6 +5,7 @@ import {
   type HostableSession,
   type ImageContent,
   type PersistedSessionInfo,
+  type PromptOptions,
   ServerDrainingError,
   SessionHost,
   SessionNotFoundError,
@@ -22,7 +23,9 @@ class FakeSession implements HostableSession {
   messages: unknown[] = [];
   disposed = false;
   prompts: string[] = [];
+  promptOptions: (PromptOptions | undefined)[] = [];
   promptImages: ImageContent[][] = [];
+  promptError: Error | undefined = undefined;
   steers: string[] = [];
   steerImages: ImageContent[][] = [];
   followUps: string[] = [];
@@ -30,6 +33,7 @@ class FakeSession implements HostableSession {
   compactionAborts = 0;
   compacts: (string | undefined)[] = [];
   compactError: Error | undefined = undefined;
+  private rejectRunningCompaction: ((error: Error) => void) | undefined = undefined;
   private listeners = new Set<(event: unknown) => void>();
 
   constructor(id: string, file?: string) {
@@ -46,8 +50,10 @@ class FakeSession implements HostableSession {
     for (const l of this.listeners) l(event);
   }
 
-  async prompt(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+  async prompt(text: string, options?: PromptOptions): Promise<void> {
+    if (this.promptError) throw this.promptError;
     this.prompts.push(text);
+    this.promptOptions.push(options);
     this.promptImages.push(options?.images ?? []);
   }
 
@@ -70,8 +76,16 @@ class FakeSession implements HostableSession {
     return { summary: "compacted" };
   }
 
+  compactUntilAborted(): Promise<unknown> {
+    return new Promise((_, reject) => {
+      this.rejectRunningCompaction = reject;
+    });
+  }
+
   abortCompaction(): void {
     this.compactionAborts++;
+    this.rejectRunningCompaction?.(new Error("Compaction cancelled"));
+    this.rejectRunningCompaction = undefined;
   }
 
   setThinkingLevel(level: never): void {
@@ -178,6 +192,36 @@ describe("SessionHost", () => {
     expect(fake.steers).toEqual(["second"]);
   });
 
+  it("routes command to prompt in both idle and streaming states, never to steer", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    host.command("s1", "/goal");
+    fake.isStreaming = true;
+    host.command("s1", "/goal check progress");
+
+    expect(fake.prompts).toEqual(["/goal", "/goal check progress"]);
+    expect(fake.promptOptions).toEqual([undefined, { streamingBehavior: "steer" }]);
+    expect(fake.steers).toEqual([]);
+    expect(fake.followUps).toEqual([]);
+    expect(() => host.command("ghost", "/goal")).toThrow(SessionNotFoundError);
+  });
+
+  it("broadcasts a session_error to attached clients when a command fails", async () => {
+    const fake = new FakeSession("s1");
+    fake.promptError = new Error("no such command");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    const client = new Recorder();
+    host.attach("s1", client);
+
+    host.command("s1", "/broken");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.received).toEqual([{ type: "session_error", sessionId: "s1", error: "no such command" }]);
+  });
+
   it("passes image attachments through prompt and steer", async () => {
     const fake = new FakeSession("s1");
     const { host } = makeHost(new Map([["ws-a", fake]]));
@@ -218,6 +262,22 @@ describe("SessionHost", () => {
 
     expect(fake.compactionAborts).toBe(1);
     expect(() => host.abortCompaction("ghost")).toThrow(SessionNotFoundError);
+  });
+
+  it("suppresses the session_error when compaction fails because the user aborted it", async () => {
+    const fake = new FakeSession("s1");
+    fake.compact = () => fake.compactUntilAborted();
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+    const client = new Recorder();
+    host.attach("s1", client);
+
+    host.compact("s1");
+    host.abortCompaction("s1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fake.compactionAborts).toBe(1);
+    expect(client.received).toEqual([]);
   });
 
   it("broadcasts a session_error to attached clients when compaction fails", async () => {
@@ -415,6 +475,7 @@ describe("SessionHost.drain", () => {
     const drainDone = host.drain(10_000, 5);
 
     expect(() => host.prompt("s1", "new work")).toThrow(ServerDrainingError);
+    expect(() => host.command("s1", "/goal")).toThrow(ServerDrainingError);
     expect(() => host.steer("s1", "new steer")).toThrow(ServerDrainingError);
     expect(() => host.followUp("s1", "new followup")).toThrow(ServerDrainingError);
     expect(() => host.compact("s1")).toThrow(ServerDrainingError);

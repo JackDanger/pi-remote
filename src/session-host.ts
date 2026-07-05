@@ -26,6 +26,12 @@ export interface CommandInfo {
   name: string;
   description?: string;
   source: CommandSource;
+  argHint?: string;
+}
+
+export interface PromptOptions {
+  images?: ImageContent[];
+  streamingBehavior?: "steer" | "followUp";
 }
 
 export interface HostableSession {
@@ -38,7 +44,7 @@ export interface HostableSession {
   readonly compactionState?: CompactionStateSnapshot | undefined;
   messages: unknown[];
   subscribe(listener: (event: unknown) => void): () => void;
-  prompt(text: string, options?: { images?: ImageContent[] }): Promise<void>;
+  prompt(text: string, options?: PromptOptions): Promise<void>;
   steer(text: string, images?: ImageContent[]): Promise<void>;
   followUp(text: string, images?: ImageContent[]): Promise<void>;
   abort(): Promise<void>;
@@ -109,6 +115,7 @@ interface LiveSession {
   workspace: string;
   clients: Set<AttachedClient>;
   unsubscribe: () => void;
+  compactionAbortRequested: boolean;
 }
 
 export class SessionNotFoundError extends Error {
@@ -265,6 +272,14 @@ export class SessionHost {
     run.catch((error: unknown) => this.broadcastError(sessionId, error));
   }
 
+  command(sessionId: string, text: string): void {
+    this.rejectNewWorkWhileDraining();
+    const entry = this.mustGetLive(sessionId);
+    this.observer?.promptSent(sessionId, "command", formatModel(entry.session.model));
+    const options = entry.session.isStreaming ? { streamingBehavior: "steer" as const } : undefined;
+    entry.session.prompt(text, options).catch((error: unknown) => this.broadcastError(sessionId, error));
+  }
+
   steer(sessionId: string, text: string, images?: ImageContent[]): void {
     this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
@@ -286,11 +301,20 @@ export class SessionHost {
   compact(sessionId: string, instructions?: string): void {
     this.rejectNewWorkWhileDraining();
     const entry = this.mustGetLive(sessionId);
-    entry.session.compact(instructions).catch((error: unknown) => this.broadcastError(sessionId, error));
+    entry.compactionAbortRequested = false;
+    entry.session.compact(instructions).catch((error: unknown) => {
+      if (entry.compactionAbortRequested) {
+        entry.compactionAbortRequested = false;
+        return;
+      }
+      this.broadcastError(sessionId, error);
+    });
   }
 
   abortCompaction(sessionId: string): void {
-    this.mustGetLive(sessionId).session.abortCompaction();
+    const entry = this.mustGetLive(sessionId);
+    entry.compactionAbortRequested = true;
+    entry.session.abortCompaction();
   }
 
   async setModel(sessionId: string, provider: string, modelId: string): Promise<ModelSnapshot | undefined> {
@@ -333,6 +357,7 @@ export class SessionHost {
       workspace,
       clients: new Set(),
       unsubscribe: () => {},
+      compactionAbortRequested: false,
     };
     entry.unsubscribe = session.subscribe((event) => {
       this.observer?.sessionEvent(session.sessionId, event);

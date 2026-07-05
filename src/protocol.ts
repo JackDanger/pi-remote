@@ -13,6 +13,7 @@ export type ClientRequest =
   | { id: number; type: "session.prompt"; sessionId: string; text: string; images?: ImageAttachment[] }
   | { id: number; type: "session.steer"; sessionId: string; text: string; images?: ImageAttachment[] }
   | { id: number; type: "session.followup"; sessionId: string; text: string; images?: ImageAttachment[] }
+  | { id: number; type: "session.command"; sessionId: string; text: string }
   | { id: number; type: "session.abort"; sessionId: string }
   | { id: number; type: "session.compact"; sessionId: string; instructions?: string }
   | { id: number; type: "session.compact_abort"; sessionId: string }
@@ -35,6 +36,7 @@ const REQUIRED_STRING_FIELDS: Record<RequestType, readonly string[]> = {
   "session.prompt": ["sessionId", "text"],
   "session.steer": ["sessionId", "text"],
   "session.followup": ["sessionId", "text"],
+  "session.command": ["sessionId", "text"],
   "session.abort": ["sessionId"],
   "session.compact": ["sessionId"],
   "session.compact_abort": ["sessionId"],

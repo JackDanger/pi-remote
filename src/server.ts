@@ -113,6 +113,9 @@ async function dispatch(
     case "session.followup":
       sessionHost.followUp(request.sessionId, request.text, toImageContents(request.images));
       return {};
+    case "session.command":
+      sessionHost.command(request.sessionId, request.text);
+      return {};
     case "session.abort":
       await sessionHost.abort(request.sessionId);
       return {};

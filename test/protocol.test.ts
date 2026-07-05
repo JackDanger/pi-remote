@@ -102,6 +102,29 @@ describe("parseClientRequest", () => {
     );
   });
 
+  it("accepts session.command, requires its text, and rejects images", () => {
+    expect(
+      parseClientRequest(JSON.stringify({ id: 30, type: "session.command", sessionId: "s", text: "/goal" })),
+    ).toMatchObject({ type: "session.command", sessionId: "s", text: "/goal" });
+    expect(() => parseClientRequest(JSON.stringify({ id: 31, type: "session.command", sessionId: "s" }))).toThrow(
+      /requires string field "text"/,
+    );
+    expect(() =>
+      parseClientRequest(JSON.stringify({ id: 32, type: "session.command", sessionId: "s", text: "" })),
+    ).toThrow(/requires string field "text"/);
+    expect(() =>
+      parseClientRequest(
+        JSON.stringify({
+          id: 33,
+          type: "session.command",
+          sessionId: "s",
+          text: "/goal",
+          images: [{ data: "aGk=", mimeType: "image/png" }],
+        }),
+      ),
+    ).toThrow(/does not accept images/);
+  });
+
   it("accepts commands.list and requires its sessionId", () => {
     expect(parseClientRequest(JSON.stringify({ id: 20, type: "commands.list", sessionId: "s" }))).toMatchObject({
       type: "commands.list",

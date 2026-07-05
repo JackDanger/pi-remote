@@ -155,6 +155,21 @@ describe("Rpc retry semantics", () => {
     expect(sockets[1]!.frames("session.prompt").length).toBe(0);
   });
 
+  it("does not auto-resend session.command after a connection loss", async () => {
+    const { rpc, sockets } = harness();
+    rpc.connect();
+    sockets[0]!.open();
+    const promise = rpc.request("session.command", { sessionId: "s", text: "/goal" });
+    const outcome = promise.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + PROBE_TIMEOUT_MS);
+    const error = await outcome;
+    expect(error).toBeInstanceOf(ConnectionLostError);
+    await vi.advanceTimersByTimeAsync(500);
+    sockets[1]!.open();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets[1]!.frames("session.command").length).toBe(0);
+  });
+
   it("does not auto-resend session.compact after a connection loss", async () => {
     const { rpc, sockets } = harness();
     rpc.connect();
