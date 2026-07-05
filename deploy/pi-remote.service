@@ -2,12 +2,13 @@
 Description=pi-remote — server-hosted Pi coding-agent sessions with a web frontend
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=%i
 ExecStart=/usr/bin/node /opt/pi-remote/dist/main.js
-Restart=on-failure
+Restart=always
 RestartSec=3
 # TimeoutStopSec must be >= the drain grace (PI_REMOTE_SHUTDOWN_GRACE_MS, default 120s) plus a margin, or systemd SIGKILLs mid-drain.
 TimeoutStopSec=150

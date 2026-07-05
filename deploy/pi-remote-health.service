@@ -1,0 +1,7 @@
+[Unit]
+Description=pi-remote health watchdog (restart if /healthz fails while active)
+After=pi-remote@bixby.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pi-remote-healthcheck.sh

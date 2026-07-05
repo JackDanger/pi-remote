@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the pi-remote health watchdog every minute
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
