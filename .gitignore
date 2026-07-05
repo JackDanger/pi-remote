@@ -1,7 +1,5 @@
 node_modules/
-dist/*.js.map
-*.log
-.env
-.env.*
+dist/
+web/dist/
+*.tsbuildinfo
 .DS_Store
-Thumbs.db
