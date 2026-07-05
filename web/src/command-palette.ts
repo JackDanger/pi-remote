@@ -4,6 +4,7 @@ export interface CommandEntry {
   name: string;
   description?: string;
   source: CommandSource;
+  argHint?: string;
 }
 
 export function paletteQuery(composerText: string): string | undefined {
@@ -25,10 +26,35 @@ export function matchCommands(commands: readonly CommandEntry[], query: string):
   return [...prefix, ...substring];
 }
 
-export function insertionFor(command: CommandEntry): string {
-  return `/${command.name} `;
+export interface GroupedCommands {
+  primary: CommandEntry[];
+  skills: CommandEntry[];
 }
 
-export function parseClearCommand(trimmedText: string): boolean {
-  return trimmedText === "/clear";
+export function groupCommands(matches: readonly CommandEntry[]): GroupedCommands {
+  const primary: CommandEntry[] = [];
+  const skills: CommandEntry[] = [];
+  for (const command of matches) {
+    (command.source === "skill" ? skills : primary).push(command);
+  }
+  return { primary, skills };
+}
+
+export type PaletteSelection = { kind: "execute"; text: string } | { kind: "insert"; text: string };
+
+export function selectionFor(command: CommandEntry): PaletteSelection {
+  const requiresArg = command.argHint?.startsWith("<") ?? false;
+  if (command.source === "builtin" && !requiresArg) return { kind: "execute", text: `/${command.name}` };
+  return { kind: "insert", text: `/${command.name} ` };
+}
+
+export function commandForText(commands: readonly CommandEntry[], trimmedText: string): CommandEntry | undefined {
+  if (!trimmedText.startsWith("/")) return undefined;
+  const invoked = trimmedText.slice(1).split(/\s/, 1)[0];
+  if (!invoked) return undefined;
+  return commands.find((command) => command.name === invoked);
+}
+
+export function parseFreshSessionCommand(trimmedText: string): boolean {
+  return trimmedText === "/clear" || trimmedText === "/new";
 }

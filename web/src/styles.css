@@ -735,6 +735,43 @@ footer {
   white-space: nowrap;
 }
 
+.cmd-arg {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cmd-row.active {
+  background: var(--border);
+}
+
+.cmd-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cmd-skills > summary {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  list-style: none;
+}
+
+.cmd-skills > summary::before {
+  content: "\25b8 ";
+}
+
+.cmd-skills[open] > summary::before {
+  content: "\25be ";
+}
+
 .composer {
   display: flex;
   gap: 8px;

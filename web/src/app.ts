@@ -1,11 +1,14 @@
 import { gateCompact, parseCompactCommand } from "./compact-command.js";
 import {
-  insertionFor,
+  commandForText,
+  groupCommands,
   matchCommands,
   paletteQuery,
-  parseClearCommand,
+  parseFreshSessionCommand,
+  selectionFor,
   type CommandEntry,
 } from "./command-palette.js";
+import { parseModelCommand, parseNameCommand, resolveModelPattern, type ModelChoice } from "./local-commands.js";
 import {
   COMPACTING_LABEL,
   classifyCompactionEnd,
@@ -561,6 +564,23 @@ function buildComposer(): void {
       hidePalette();
       return;
     }
+    if (paletteRowElements().length > 0) {
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        movePaletteHighlight(1);
+        return;
+      }
+      if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        movePaletteHighlight(-1);
+        return;
+      }
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        paletteRowElements()[paletteIndex]?.click();
+        return;
+      }
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !matchMedia("(pointer: coarse)").matches) {
       ev.preventDefault();
       void sendPrompt();
@@ -646,12 +666,62 @@ function updateSendEnabled(): void {
   sendBtn.disabled = textarea.value.trim() === "" && chat.attachments.length === 0;
 }
 
+let paletteIndex = 0;
+
 function hidePalette(): void {
   const palette = document.getElementById("cmd-palette");
   if (palette) {
     palette.hidden = true;
     palette.innerHTML = "";
   }
+  paletteIndex = 0;
+}
+
+function paletteRowElements(): HTMLButtonElement[] {
+  const palette = document.getElementById("cmd-palette");
+  if (!palette || palette.hidden) return [];
+  return [...palette.querySelectorAll<HTMLButtonElement>(".cmd-row")].filter((row) => row.offsetParent !== null);
+}
+
+function highlightPaletteRow(index: number): void {
+  const rows = paletteRowElements();
+  if (rows.length === 0) return;
+  paletteIndex = Math.max(0, Math.min(index, rows.length - 1));
+  rows.forEach((row, i) => row.classList.toggle("active", i === paletteIndex));
+  rows[paletteIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function movePaletteHighlight(delta: number): void {
+  highlightPaletteRow(paletteIndex + delta);
+}
+
+function commandRow(command: CommandEntry): HTMLElement {
+  const row = el(`
+    <button class="cmd-row">
+      <span class="cmd-head">
+        <span class="cmd-name">/${escapeHtml(command.name)}</span>
+        ${command.argHint ? `<span class="cmd-arg">${escapeHtml(command.argHint)}</span>` : ""}
+        <span class="cmd-badge ${escapeHtml(command.source)}">${escapeHtml(command.source)}</span>
+      </span>
+      ${command.description ? `<span class="cmd-desc">${escapeHtml(command.description)}</span>` : ""}
+    </button>`);
+  row.onclick = () => selectPaletteCommand(command);
+  return row;
+}
+
+function selectPaletteCommand(command: CommandEntry): void {
+  const textarea = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+  if (!textarea) return;
+  const selection = selectionFor(command);
+  textarea.value = selection.text;
+  if (selection.kind === "execute") {
+    hidePalette();
+    void sendPrompt();
+    return;
+  }
+  textarea.focus();
+  updatePalette();
+  updateSendEnabled();
 }
 
 function updatePalette(): void {
@@ -659,30 +729,30 @@ function updatePalette(): void {
   const textarea = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
   if (!palette || !textarea || !chat) return;
   const query = paletteQuery(textarea.value);
-  const matches = query === undefined ? [] : matchCommands(chat.commands, query);
-  if (matches.length === 0) {
+  if (query === undefined || chat.commands.length === 0) {
     hidePalette();
     return;
   }
+  const matches = matchCommands(chat.commands, query);
   palette.hidden = false;
   palette.innerHTML = "";
-  for (const command of matches) {
-    const row = el(`
-      <button class="cmd-row">
-        <span class="cmd-head">
-          <span class="cmd-name">/${escapeHtml(command.name)}</span>
-          <span class="cmd-badge ${escapeHtml(command.source)}">${escapeHtml(command.source)}</span>
-        </span>
-        ${command.description ? `<span class="cmd-desc">${escapeHtml(command.description)}</span>` : ""}
-      </button>`);
-    row.onclick = () => {
-      textarea.value = insertionFor(command);
-      textarea.focus();
-      updatePalette();
-      updateSendEnabled();
-    };
-    palette.appendChild(row);
+  paletteIndex = 0;
+  if (matches.length === 0) {
+    palette.appendChild(el(`<div class="cmd-empty">no commands match</div>`));
+    return;
   }
+  const { primary, skills } = groupCommands(matches);
+  for (const command of primary) palette.appendChild(commandRow(command));
+  if (skills.length > 0) {
+    const open = query !== "" || primary.length === 0;
+    const section = el(
+      `<details class="cmd-skills" ${open ? "open" : ""}><summary>skills · ${skills.length}</summary></details>`,
+    );
+    for (const command of skills) section.appendChild(commandRow(command));
+    section.addEventListener("toggle", () => highlightPaletteRow(paletteIndex));
+    palette.appendChild(section);
+  }
+  highlightPaletteRow(0);
 }
 
 async function sendPrompt(): Promise<void> {
@@ -691,21 +761,38 @@ async function sendPrompt(): Promise<void> {
   const text = textarea.value.trim();
   const images = chat.attachments.slice();
   if (!text && images.length === 0) return;
-  const compactCommand = parseCompactCommand(text);
-  if (compactCommand) {
+  const resetComposer = (): void => {
     textarea.value = "";
     textarea.style.height = "auto";
     updateSendEnabled();
     hidePalette();
+  };
+  const compactCommand = parseCompactCommand(text);
+  if (compactCommand) {
+    resetComposer();
     await sendCompact(compactCommand.instructions);
     return;
   }
-  if (parseClearCommand(text)) {
-    textarea.value = "";
-    textarea.style.height = "auto";
-    updateSendEnabled();
-    hidePalette();
+  if (parseFreshSessionCommand(text)) {
+    resetComposer();
     await clearSession();
+    return;
+  }
+  const modelCommand = parseModelCommand(text);
+  if (modelCommand) {
+    resetComposer();
+    await runModelCommand(modelCommand.pattern);
+    return;
+  }
+  const nameCommand = parseNameCommand(text);
+  if (nameCommand) {
+    resetComposer();
+    await runNameCommand(nameCommand.title);
+    return;
+  }
+  if (commandForText(chat.commands, text)) {
+    resetComposer();
+    await sendCommand(text);
     return;
   }
   textarea.value = "";
@@ -768,6 +855,77 @@ async function clearSession(): Promise<void> {
     void rpc.request("session.detach", { sessionId: previousSessionId }).catch(() => {});
     await openChat(session.sessionId);
     toast("Fresh session started — the previous one is in the session list", "info");
+  } catch (error) {
+    toast(String((error as Error).message));
+  }
+}
+
+async function sendCommand(text: string): Promise<void> {
+  if (!chat) return;
+  try {
+    await rpc.request("session.command", { sessionId: chat.summary.sessionId, text });
+  } catch (error) {
+    const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+    if (input && !input.value) input.value = text;
+    if (error instanceof ConnectionLostError) {
+      toast("Offline — the command wasn't sent; it's back in the composer", "info");
+    } else {
+      toast(String((error as Error).message));
+    }
+  }
+}
+
+async function runModelCommand(pattern?: string): Promise<void> {
+  if (!chat) return;
+  if (models.length === 0) await refreshModels().catch(() => {});
+  if (!pattern) {
+    openSessionSheet();
+    return;
+  }
+  const resolution = resolveModelPattern(models, pattern);
+  if (resolution.kind === "none") {
+    toast(`No model matches "${pattern}"`);
+    return;
+  }
+  if (resolution.kind === "ambiguous") {
+    toast(`"${pattern}" matches ${resolution.matches.length} models — pick one`, "info");
+    openSessionSheet();
+    return;
+  }
+  await applyModel(resolution.model);
+}
+
+async function applyModel(choice: ModelChoice): Promise<void> {
+  if (!chat) return;
+  try {
+    const { model } = await rpc.request<{ model?: ModelSnapshot }>("session.set_model", {
+      sessionId: chat.summary.sessionId,
+      provider: choice.provider,
+      modelId: choice.id,
+    });
+    chat.model = model;
+    updateModelChip();
+    toast(`Switched to ${modelLabel(model)} · loads on your next message`, "info");
+  } catch (error) {
+    toast(String((error as Error).message));
+  }
+}
+
+async function runNameCommand(title: string): Promise<void> {
+  if (!chat) return;
+  if (!title) {
+    toast("Usage: /name <title>", "info");
+    return;
+  }
+  try {
+    const result = await rpc.request<{ name: string }>("session.rename", {
+      sessionId: chat.summary.sessionId,
+      name: title,
+    });
+    chat.summary.name = result.name;
+    const titleEl = document.getElementById("chat-title");
+    if (titleEl) titleEl.textContent = chatTitle();
+    toast(`Renamed to “${result.name}”`, "info");
   } catch (error) {
     toast(String((error as Error).message));
   }
