@@ -102,6 +102,16 @@ describe("parseClientRequest", () => {
     );
   });
 
+  it("accepts commands.list and requires its sessionId", () => {
+    expect(parseClientRequest(JSON.stringify({ id: 20, type: "commands.list", sessionId: "s" }))).toMatchObject({
+      type: "commands.list",
+      sessionId: "s",
+    });
+    expect(() => parseClientRequest(JSON.stringify({ id: 21, type: "commands.list" }))).toThrow(
+      /requires string field "sessionId"/,
+    );
+  });
+
   it("rejects missing required fields", () => {
     expect(() => parseClientRequest(JSON.stringify({ id: 1, type: "session.prompt", sessionId: "s" }))).toThrow(
       /requires string field "text"/,

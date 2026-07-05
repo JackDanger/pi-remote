@@ -131,6 +131,8 @@ async function dispatch(
       sessionsChanged();
       return { name };
     }
+    case "commands.list":
+      return { commands: sessionHost.listCommands(request.sessionId) };
     case "models.list":
       return { models: options.listModels() };
     case "ping":

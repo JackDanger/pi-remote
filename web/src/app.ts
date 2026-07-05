@@ -1,11 +1,20 @@
 import { gateCompact, parseCompactCommand } from "./compact-command.js";
 import {
+  insertionFor,
+  matchCommands,
+  paletteQuery,
+  parseClearCommand,
+  type CommandEntry,
+} from "./command-palette.js";
+import {
   COMPACTING_LABEL,
   classifyCompactionEnd,
-  compactingElapsed,
+  compactingStats,
   compactionApplied,
   compactionResultTitle,
+  compactionStartFromSnapshot,
   type CompactionEndEvent,
+  type CompactionStateSnapshot,
 } from "./compaction-view.js";
 import { escapeHtml, renderMarkdown } from "./markdown.js";
 import { ConnectionLostError, Rpc, type ConnState, type SocketLike } from "./rpc.js";
@@ -73,6 +82,7 @@ interface AttachState {
   model?: ModelSnapshot;
   thinkingLevel: string;
   telemetry?: TelemetrySnapshot;
+  compactionState?: CompactionStateSnapshot;
 }
 
 interface ImageAttachment {
@@ -92,6 +102,8 @@ interface ChatState {
   streaming: boolean;
   compacting: boolean;
   compactionStartedAt?: number;
+  compactionTokensSoFar?: number;
+  commands: CommandEntry[];
   deliverMode: "steer" | "followup";
   attachments: ImageAttachment[];
   queuedNotes: string[];
@@ -350,7 +362,12 @@ async function openChat(sessionId: string): Promise<void> {
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     streaming: state.summary.streaming,
-    compacting: false,
+    compacting: state.compactionState !== undefined,
+    compactionStartedAt: state.compactionState
+      ? compactionStartFromSnapshot(Date.now(), state.compactionState)
+      : undefined,
+    compactionTokensSoFar: state.compactionState?.tokensSoFar,
+    commands: [],
     deliverMode: "steer",
     attachments: [],
     queuedNotes: [],
@@ -363,6 +380,19 @@ async function openChat(sessionId: string): Promise<void> {
   renderChatShell();
   renderLog();
   scrollLogToBottom(true);
+  void loadCommands(sessionId);
+}
+
+async function loadCommands(sessionId: string): Promise<void> {
+  try {
+    const result = await rpc.request<{ commands: CommandEntry[] }>("commands.list", { sessionId });
+    if (chat && view === "chat" && chat.summary.sessionId === sessionId) {
+      chat.commands = result.commands;
+      updatePalette();
+    }
+  } catch {
+    return;
+  }
 }
 
 function renderChatShell(): void {
@@ -506,6 +536,7 @@ function buildComposer(): void {
       <button class="seg" data-mode="followup">After done</button>
       <button class="stop" id="stop-btn">■ Stop</button>
     </div>
+    <div class="cmd-palette" id="cmd-palette" hidden></div>
     <div class="composer">
       <button class="icon" id="attach-btn" aria-label="Attach image">+</button>
       <textarea id="prompt-input" placeholder="Message the agent…" rows="1" enterkeyhint="send"></textarea>
@@ -523,8 +554,13 @@ function buildComposer(): void {
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
     updateSendEnabled();
+    updatePalette();
   };
   textarea.onkeydown = (ev) => {
+    if (ev.key === "Escape") {
+      hidePalette();
+      return;
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !matchMedia("(pointer: coarse)").matches) {
       ev.preventDefault();
       void sendPrompt();
@@ -610,6 +646,45 @@ function updateSendEnabled(): void {
   sendBtn.disabled = textarea.value.trim() === "" && chat.attachments.length === 0;
 }
 
+function hidePalette(): void {
+  const palette = document.getElementById("cmd-palette");
+  if (palette) {
+    palette.hidden = true;
+    palette.innerHTML = "";
+  }
+}
+
+function updatePalette(): void {
+  const palette = document.getElementById("cmd-palette");
+  const textarea = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+  if (!palette || !textarea || !chat) return;
+  const query = paletteQuery(textarea.value);
+  const matches = query === undefined ? [] : matchCommands(chat.commands, query);
+  if (matches.length === 0) {
+    hidePalette();
+    return;
+  }
+  palette.hidden = false;
+  palette.innerHTML = "";
+  for (const command of matches) {
+    const row = el(`
+      <button class="cmd-row">
+        <span class="cmd-head">
+          <span class="cmd-name">/${escapeHtml(command.name)}</span>
+          <span class="cmd-badge ${escapeHtml(command.source)}">${escapeHtml(command.source)}</span>
+        </span>
+        ${command.description ? `<span class="cmd-desc">${escapeHtml(command.description)}</span>` : ""}
+      </button>`);
+    row.onclick = () => {
+      textarea.value = insertionFor(command);
+      textarea.focus();
+      updatePalette();
+      updateSendEnabled();
+    };
+    palette.appendChild(row);
+  }
+}
+
 async function sendPrompt(): Promise<void> {
   if (!chat) return;
   const textarea = document.getElementById("prompt-input") as HTMLTextAreaElement;
@@ -621,7 +696,16 @@ async function sendPrompt(): Promise<void> {
     textarea.value = "";
     textarea.style.height = "auto";
     updateSendEnabled();
+    hidePalette();
     await sendCompact(compactCommand.instructions);
+    return;
+  }
+  if (parseClearCommand(text)) {
+    textarea.value = "";
+    textarea.style.height = "auto";
+    updateSendEnabled();
+    hidePalette();
+    await clearSession();
     return;
   }
   textarea.value = "";
@@ -629,6 +713,7 @@ async function sendPrompt(): Promise<void> {
   chat.attachments = [];
   renderAttachStrip();
   updateSendEnabled();
+  hidePalette();
 
   const type = chat.streaming ? (chat.deliverMode === "followup" ? "session.followup" : "session.steer") : "session.prompt";
   const freshRun = type === "session.prompt";
@@ -674,6 +759,20 @@ async function sendPrompt(): Promise<void> {
   }
 }
 
+async function clearSession(): Promise<void> {
+  if (!chat) return;
+  const previousSessionId = chat.summary.sessionId;
+  const workspace = chat.summary.workspace;
+  try {
+    const { session } = await rpc.request<{ session: SessionSummary }>("sessions.create", { workspace });
+    void rpc.request("session.detach", { sessionId: previousSessionId }).catch(() => {});
+    await openChat(session.sessionId);
+    toast("Fresh session started — the previous one is in the session list", "info");
+  } catch (error) {
+    toast(String((error as Error).message));
+  }
+}
+
 async function sendCompact(instructions?: string): Promise<void> {
   if (!chat) return;
   const gate = gateCompact(chat.streaming, chat.compacting);
@@ -683,6 +782,7 @@ async function sendCompact(instructions?: string): Promise<void> {
   }
   chat.compacting = true;
   chat.compactionStartedAt = Date.now();
+  chat.compactionTokensSoFar = undefined;
   renderStatusBar();
   try {
     await rpc.request("session.compact", {
@@ -699,6 +799,7 @@ function clearCompactingState(): void {
   if (!chat) return;
   chat.compacting = false;
   chat.compactionStartedAt = undefined;
+  chat.compactionTokensSoFar = undefined;
   renderStatusBar();
 }
 
@@ -751,7 +852,7 @@ function renderStatusBar(): void {
     bar.hidden = false;
     stateEl.innerHTML = `<span class="work-spin"></span>${escapeHtml(COMPACTING_LABEL)}`;
     stateEl.classList.remove("idle", "err");
-    statsEl.textContent = compactingElapsed(chat.compactionStartedAt, Date.now());
+    statsEl.textContent = compactingStats(chat.compactionStartedAt, chat.compactionTokensSoFar, Date.now());
     if (cancelBtn) cancelBtn.hidden = false;
     return;
   }
@@ -1212,11 +1313,19 @@ function handleSessionEvent(sessionId: string, event: Record<string, unknown>): 
     case "compaction_start":
       chat.compacting = true;
       chat.compactionStartedAt ??= Date.now();
+      chat.compactionTokensSoFar = undefined;
+      renderStatusBar();
+      break;
+    case "compaction_progress":
+      chat.compacting = true;
+      chat.compactionStartedAt ??= compactionStartFromSnapshot(Date.now(), { elapsedMs: Number(event.elapsedMs) });
+      chat.compactionTokensSoFar = Number(event.tokensSoFar);
       renderStatusBar();
       break;
     case "compaction_end": {
       chat.compacting = false;
       chat.compactionStartedAt = undefined;
+      chat.compactionTokensSoFar = undefined;
       const outcome = classifyCompactionEnd(event as unknown as CompactionEndEvent);
       if (outcome.kind === "done") {
         if (outcome.result.estimatedTokensAfter !== undefined) {
@@ -1288,8 +1397,17 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
     const state = await attachWithResume(sessionId, chat.summary.path);
     if (!chat || view !== "chat" || chat.summary.sessionId !== sessionId) return;
     const drifted = state.messages.length !== chat.messages.length;
-    chat.compacting = chat.compacting && !compactionApplied(chat.messages, state.messages);
-    if (!chat.compacting) chat.compactionStartedAt = undefined;
+    if (state.compactionState) {
+      chat.compacting = true;
+      chat.compactionStartedAt = compactionStartFromSnapshot(Date.now(), state.compactionState);
+      chat.compactionTokensSoFar = state.compactionState.tokensSoFar;
+    } else {
+      chat.compacting = chat.compacting && !compactionApplied(chat.messages, state.messages);
+      if (!chat.compacting) {
+        chat.compactionStartedAt = undefined;
+        chat.compactionTokensSoFar = undefined;
+      }
+    }
     chat.summary = state.summary;
     chat.messages = state.messages;
     chat.model = state.model;
@@ -1312,6 +1430,7 @@ async function resyncChat(sessionId: string, options: { trustServerStreaming?: b
       scrollLogToBottom();
     }
     updateStreamingUi();
+    void loadCommands(sessionId);
   } catch {
     if (rpc.connected && view === "chat" && chat?.summary.sessionId === sessionId) {
       toast("Session is no longer available");

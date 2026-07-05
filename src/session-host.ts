@@ -13,6 +13,21 @@ export interface ImageContent {
   mimeType: string;
 }
 
+export interface CompactionStateSnapshot {
+  reason: "manual" | "threshold" | "overflow";
+  startedAt: number;
+  tokensSoFar: number;
+  elapsedMs: number;
+}
+
+export type CommandSource = "builtin" | "extension" | "prompt" | "skill";
+
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  source: CommandSource;
+}
+
 export interface HostableSession {
   sessionId: string;
   sessionFile: string | undefined;
@@ -20,6 +35,7 @@ export interface HostableSession {
   model: { provider: string; id: string; name?: string } | undefined;
   thinkingLevel: string;
   isStreaming: boolean;
+  readonly compactionState?: CompactionStateSnapshot | undefined;
   messages: unknown[];
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(text: string, options?: { images?: ImageContent[] }): Promise<void>;
@@ -61,6 +77,7 @@ export interface SessionHostDeps {
   listPersisted: () => Promise<PersistedSessionInfo[]>;
   deletePersisted: (path: string) => Promise<void>;
   setSessionModel: (session: HostableSession, provider: string, modelId: string) => Promise<void>;
+  listCommands: (session: HostableSession) => CommandInfo[];
 }
 
 export interface AttachedClient {
@@ -84,6 +101,7 @@ export interface AttachState {
   messages: unknown[];
   model?: ModelSnapshot;
   thinkingLevel: string;
+  compactionState?: CompactionStateSnapshot;
 }
 
 interface LiveSession {
@@ -204,12 +222,18 @@ export class SessionHost {
   attach(sessionId: string, client: AttachedClient): AttachState {
     const entry = this.mustGetLive(sessionId);
     entry.clients.add(client);
+    const compactionState = entry.session.compactionState;
     return {
       summary: this.summarizeLive(entry),
       messages: entry.session.messages,
       model: toModelSnapshot(entry.session.model),
       thinkingLevel: entry.session.thinkingLevel,
+      ...(compactionState ? { compactionState } : {}),
     };
+  }
+
+  listCommands(sessionId: string): CommandInfo[] {
+    return this.deps.listCommands(this.mustGetLive(sessionId).session);
   }
 
   detach(sessionId: string, client: AttachedClient): void {

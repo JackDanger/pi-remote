@@ -62,6 +62,7 @@ describe("static file cache headers", () => {
       listPersisted: async () => [],
       deletePersisted: async () => {},
       setSessionModel: async () => {},
+      listCommands: () => [],
     });
     const server = startServer({
       host: "127.0.0.1",

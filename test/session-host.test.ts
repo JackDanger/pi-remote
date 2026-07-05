@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  type CommandInfo,
+  type CompactionStateSnapshot,
   type HostableSession,
   type ImageContent,
   type PersistedSessionInfo,
@@ -15,6 +17,8 @@ class FakeSession implements HostableSession {
   model: { provider: string; id: string } | undefined = { provider: "fake", id: "model" };
   thinkingLevel = "off";
   isStreaming = false;
+  compactionState: CompactionStateSnapshot | undefined = undefined;
+  commands: CommandInfo[] = [];
   messages: unknown[] = [];
   disposed = false;
   prompts: string[] = [];
@@ -106,6 +110,7 @@ function makeHost(sessions: Map<string, FakeSession>, persisted: PersistedSessio
     setSessionModel: async (session, provider, modelId) => {
       (session as FakeSession).model = { provider, id: modelId };
     },
+    listCommands: (session) => (session as FakeSession).commands,
   });
   return { host, deleted };
 }
@@ -313,6 +318,39 @@ describe("SessionHost", () => {
   it("throws SessionNotFoundError for unknown live sessions", () => {
     const { host } = makeHost(new Map());
     expect(() => host.prompt("nope", "hi")).toThrow(SessionNotFoundError);
+  });
+
+  it("attach carries the in-flight compaction state and omits it when idle", async () => {
+    const fake = new FakeSession("s1");
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    const idle = host.attach("s1", new Recorder());
+    expect(idle.compactionState).toBeUndefined();
+    expect("compactionState" in idle).toBe(false);
+
+    fake.compactionState = { reason: "manual", startedAt: 1000, tokensSoFar: 3200, elapsedMs: 14000 };
+    const midCompaction = host.attach("s1", new Recorder());
+    expect(midCompaction.compactionState).toEqual({
+      reason: "manual",
+      startedAt: 1000,
+      tokensSoFar: 3200,
+      elapsedMs: 14000,
+    });
+  });
+
+  it("lists the session's commands through the environment dep", async () => {
+    const fake = new FakeSession("s1");
+    fake.commands = [
+      { name: "compact", description: "Manually compact the session context", source: "builtin" },
+      { name: "solvency", description: "Solvency status", source: "extension" },
+      { name: "skill:brief", source: "skill" },
+    ];
+    const { host } = makeHost(new Map([["ws-a", fake]]));
+    await host.createSession("ws-a", undefined);
+
+    expect(host.listCommands("s1")).toEqual(fake.commands);
+    expect(() => host.listCommands("ghost")).toThrow(SessionNotFoundError);
   });
 });
 

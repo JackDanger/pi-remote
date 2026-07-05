@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   COMPACTING_LABEL,
   classifyCompactionEnd,
-  compactingElapsed,
+  compactingStats,
   compactionApplied,
   compactionResultTitle,
+  compactionStartFromSnapshot,
+  compactionTokensPerSec,
 } from "../web/src/compaction-view.js";
 
 describe("classifyCompactionEnd", () => {
@@ -59,15 +61,55 @@ describe("compactionResultTitle", () => {
   });
 });
 
-describe("compactingElapsed", () => {
-  it("formats the running duration since compaction started", () => {
-    expect(compactingElapsed(1000, 43000)).toBe("42s");
-    expect(compactingElapsed(0, 90000)).toBe("1m30s");
+describe("compactionTokensPerSec", () => {
+  it("divides tokens by elapsed seconds", () => {
+    expect(compactionTokensPerSec(3200, 14000)).toBeCloseTo(228.57, 1);
+    expect(compactionTokensPerSec(500, 2000)).toBe(250);
   });
 
-  it("is empty without a start time and never negative", () => {
-    expect(compactingElapsed(undefined, 5000)).toBe("");
-    expect(compactingElapsed(9000, 5000)).toBe("0.0s");
+  it("withholds a rate until a full second has elapsed", () => {
+    expect(compactionTokensPerSec(120, 999)).toBeUndefined();
+    expect(compactionTokensPerSec(120, 0)).toBeUndefined();
+  });
+
+  it("withholds a rate without tokens", () => {
+    expect(compactionTokensPerSec(0, 5000)).toBeUndefined();
+  });
+});
+
+describe("compactingStats", () => {
+  it("shows tokens, elapsed, and rate mid-compaction", () => {
+    expect(compactingStats(0, 3200, 14000)).toBe("3.2k tok · 14s · 229 tok/s");
+  });
+
+  it("shows only elapsed before the first progress event", () => {
+    expect(compactingStats(1000, undefined, 43000)).toBe("42s");
+    expect(compactingStats(0, 0, 90000)).toBe("1m30s");
+  });
+
+  it("shows tokens without a rate when the start time is unknown", () => {
+    expect(compactingStats(undefined, 3200, 14000)).toBe("3.2k tok");
+  });
+
+  it("is empty with no data and never shows a negative duration", () => {
+    expect(compactingStats(undefined, undefined, 5000)).toBe("");
+    expect(compactingStats(9000, undefined, 5000)).toBe("0.0s");
+  });
+});
+
+describe("compactionStartFromSnapshot", () => {
+  it("reconstructs the local start time from the server-reported elapsed", () => {
+    expect(compactionStartFromSnapshot(100000, { elapsedMs: 14000 })).toBe(86000);
+  });
+
+  it("clamps a negative elapsed to now", () => {
+    expect(compactionStartFromSnapshot(100000, { elapsedMs: -50 })).toBe(100000);
+  });
+
+  it("keeps the local elapsed ticking forward from the reconstructed start", () => {
+    const attachedAt = 100000;
+    const startedAt = compactionStartFromSnapshot(attachedAt, { elapsedMs: 14000 });
+    expect(compactingStats(startedAt, 3200, attachedAt + 2000)).toBe("3.2k tok · 16s · 200 tok/s");
   });
 });
 

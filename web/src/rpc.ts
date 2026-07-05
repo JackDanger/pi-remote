@@ -30,6 +30,7 @@ const MAX_BACKOFF_MS = 8000;
 const IDEMPOTENT_TYPES = new Set([
   "ping",
   "models.list",
+  "commands.list",
   "sessions.list",
   "sessions.resume",
   "session.attach",

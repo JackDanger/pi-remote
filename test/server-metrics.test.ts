@@ -45,6 +45,7 @@ function makeHost(fake: FakeSession, telemetry: Telemetry): SessionHost {
       setSessionModel: async (session, provider, modelId) => {
         (session as FakeSession).model = { provider, id: modelId };
       },
+      listCommands: () => [],
     },
     telemetry,
   );

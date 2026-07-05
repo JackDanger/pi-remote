@@ -666,6 +666,75 @@ footer {
   z-index: 5;
 }
 
+.cmd-palette {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.cmd-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  text-align: left;
+  min-height: 44px;
+}
+
+.cmd-row:last-child {
+  border-bottom: none;
+}
+
+.cmd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmd-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cmd-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.cmd-badge.builtin {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.cmd-badge.extension {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.cmd-desc {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer {
   display: flex;
   gap: 8px;

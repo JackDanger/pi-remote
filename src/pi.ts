@@ -3,15 +3,18 @@ import path from "node:path";
 import {
   type AgentSession,
   AuthStorage,
+  BUILTIN_SLASH_COMMANDS,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
   ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { collectCommands } from "./commands.js";
 import type { Config, ModelRef } from "./config.js";
 import { parseModelRef } from "./config.js";
 import type {
+  CommandInfo,
   HostableSession,
   ModelSnapshot,
   PersistedSessionInfo,
@@ -119,6 +122,16 @@ export function createPiEnvironment(config: Config): PiEnvironment {
     await (session as unknown as AgentSession).setModel(model);
   };
 
+  const listCommands = (session: HostableSession): CommandInfo[] => {
+    const live = session as unknown as AgentSession;
+    return collectCommands({
+      engineBuiltins: BUILTIN_SLASH_COMMANDS,
+      extensionCommands: live.extensionRunner.getRegisteredCommands(),
+      promptTemplates: live.promptTemplates,
+      skills: live.resourceLoader.getSkills().skills,
+    });
+  };
+
   const listModels = (): ModelSnapshot[] =>
     modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name, reasoning: m.reasoning }));
 
@@ -138,7 +151,7 @@ export function createPiEnvironment(config: Config): PiEnvironment {
   };
 
   return {
-    hostDeps: { factory: openSession, listPersisted, deletePersisted, setSessionModel },
+    hostDeps: { factory: openSession, listPersisted, deletePersisted, setSessionModel, listCommands },
     listModels,
     workspaceRoot: config.workspaceRoot,
     warmup,

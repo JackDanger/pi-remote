@@ -19,6 +19,7 @@ export type ClientRequest =
   | { id: number; type: "session.set_model"; sessionId: string; provider: string; modelId: string }
   | { id: number; type: "session.set_thinking"; sessionId: string; level: string }
   | { id: number; type: "session.rename"; sessionId: string; name: string }
+  | { id: number; type: "commands.list"; sessionId: string }
   | { id: number; type: "models.list" }
   | { id: number; type: "ping" };
 
@@ -40,6 +41,7 @@ const REQUIRED_STRING_FIELDS: Record<RequestType, readonly string[]> = {
   "session.set_model": ["sessionId", "provider", "modelId"],
   "session.set_thinking": ["sessionId", "level"],
   "session.rename": ["sessionId", "name"],
+  "commands.list": ["sessionId"],
   "models.list": [],
   ping: [],
 };

@@ -1,6 +1,13 @@
-import { formatDuration, formatTokenCount } from "./turn-stats.js";
+import { formatDuration, formatTokenCount, formatTokensPerSec } from "./turn-stats.js";
 
 export const COMPACTING_LABEL = "Compacting context…";
+
+export interface CompactionStateSnapshot {
+  reason: string;
+  startedAt: number;
+  tokensSoFar: number;
+  elapsedMs: number;
+}
 
 export interface CompactionResultSnapshot {
   summary: string;
@@ -47,8 +54,25 @@ export function compactionResultTitle(tokensBefore?: number, estimatedTokensAfte
   return percentSaved >= 1 ? `${base} (−${percentSaved}%)` : base;
 }
 
-export function compactingElapsed(startedAt: number | undefined, now: number): string {
-  return startedAt === undefined ? "" : formatDuration(Math.max(0, now - startedAt));
+export function compactionTokensPerSec(tokensSoFar: number, elapsedMs: number): number | undefined {
+  if (tokensSoFar <= 0 || elapsedMs < 1000) return undefined;
+  return tokensSoFar / (elapsedMs / 1000);
+}
+
+export function compactingStats(startedAt: number | undefined, tokensSoFar: number | undefined, now: number): string {
+  const parts: string[] = [];
+  if (tokensSoFar !== undefined && tokensSoFar > 0) parts.push(`${formatTokenCount(tokensSoFar)} tok`);
+  if (startedAt !== undefined) {
+    const elapsedMs = Math.max(0, now - startedAt);
+    parts.push(formatDuration(elapsedMs));
+    const rate = tokensSoFar === undefined ? undefined : compactionTokensPerSec(tokensSoFar, elapsedMs);
+    if (rate !== undefined) parts.push(`${formatTokensPerSec(rate)} tok/s`);
+  }
+  return parts.join(" · ");
+}
+
+export function compactionStartFromSnapshot(nowMs: number, snapshot: { elapsedMs: number }): number {
+  return nowMs - Math.max(0, snapshot.elapsedMs);
 }
 
 interface RoleAndSummary {
