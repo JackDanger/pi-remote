@@ -1,16 +1,16 @@
 :root {
-  --bg: #0e1216;
-  --panel: #191f26;
-  --panel-2: #222a33;
-  --border: #2b3540;
-  --text: #e8eef4;
-  --muted: #8d9aa8;
-  --accent: #4da3ff;
-  --accent-ink: #06131f;
-  --user-bubble: #24415f;
-  --error: #ff6b6b;
-  --ok: #3fb950;
-  --warn: #d9a03f;
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --panel-2: #f5f5f5;
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --muted: #666666;
+  --accent: #0066cc;
+  --accent-ink: #ffffff;
+  --user-bubble: #e8f0fe;
+  --error: #d93025;
+  --ok: #1e8e3e;
+  --warn: #f9ab00;
   --radius: 14px;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
 }
@@ -289,6 +289,7 @@ main.chat {
   max-width: 86%;
   margin-right: 0;
   margin-left: auto;
+  position: relative;
 }
 
 .user-img {
@@ -372,7 +373,7 @@ main.chat {
 }
 
 pre {
-  background: #0a0e12;
+  background: #f0f0f0;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
@@ -386,7 +387,7 @@ pre {
 }
 
 code {
-  background: #0a0e12;
+  background: #f0f0f0;
   border-radius: 5px;
   padding: 1px 5px;
   font-size: 14px;
@@ -421,14 +422,27 @@ pre code {
   position: absolute;
   top: 4px;
   right: 4px;
-  min-height: 30px;
-  min-width: 30px;
-  padding: 4px 8px;
-  font-size: 12px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 11px;
   border-radius: 7px;
-  background: var(--panel-2);
+  background: var(--panel);
   color: var(--muted);
-  opacity: 0.9;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.copy-btn:active {
+  opacity: 1;
+  transform: scale(0.95);
+}
+
+.msg.user .copy-btn {
+  top: 6px;
+  right: 6px;
 }
 
 details.thinking,
@@ -1029,7 +1043,7 @@ footer {
   bottom: calc(96px + env(safe-area-inset-bottom));
   left: 50%;
   transform: translateX(-50%);
-  background: #3a1f24;
+  background: #ffebee;
   color: var(--error);
   border: 1px solid var(--error);
   border-radius: 12px;
@@ -1037,12 +1051,14 @@ footer {
   font-size: 14px;
   max-width: 92vw;
   z-index: 30;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 .toast.info {
-  background: var(--panel-2);
+  background: var(--panel);
   color: var(--text);
   border-color: var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 @media (min-width: 861px) {
