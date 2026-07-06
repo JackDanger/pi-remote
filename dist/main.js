@@ -8,7 +8,7 @@ import { SessionHost } from "./session-host.js";
 import { startServer } from "./server.js";
 import { Telemetry } from "./telemetry.js";
 const config = loadConfig();
-applyHttpIdleTimeout(config.httpIdleTimeoutMs);
+await applyHttpIdleTimeout(config.httpIdleTimeoutMs);
 console.log(`HTTP idle timeout for model requests: ${formatHttpIdleTimeout(config.httpIdleTimeoutMs)}`);
 const environment = createPiEnvironment(config);
 const telemetry = config.telemetry

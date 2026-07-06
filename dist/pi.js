@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { AuthStorage, BUILTIN_SLASH_COMMANDS, createAgentSession, DefaultResourceLoader, getAgentDir, ModelRegistry, SessionManager, } from "@earendil-works/pi-coding-agent";
-import { collectCommands } from "./commands.js";
+import { AuthStorage, createAgentSession, DefaultResourceLoader, getAgentDir, ModelRegistry, SessionManager, } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "./config.js";
 export function createPiEnvironment(config) {
     const agentDir = config.agentDir ?? getAgentDir();
@@ -94,15 +93,6 @@ export function createPiEnvironment(config) {
             throw new Error(`Model ${provider}/${modelId} not found in registry`);
         await session.setModel(model);
     };
-    const listCommands = (session) => {
-        const live = session;
-        return collectCommands({
-            engineBuiltins: BUILTIN_SLASH_COMMANDS,
-            extensionCommands: live.extensionRunner.getRegisteredCommands(),
-            promptTemplates: live.promptTemplates,
-            skills: live.resourceLoader.getSkills().skills,
-        });
-    };
     const listModels = () => modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, name: m.name, reasoning: m.reasoning }));
     const warmup = async () => {
         fs.mkdirSync(config.workspaceRoot, { recursive: true });
@@ -119,7 +109,7 @@ export function createPiEnvironment(config) {
         session.dispose();
     };
     return {
-        hostDeps: { factory: openSession, listPersisted, deletePersisted, setSessionModel, listCommands },
+        hostDeps: { factory: openSession, listPersisted, deletePersisted, setSessionModel },
         listModels,
         workspaceRoot: config.workspaceRoot,
         warmup,

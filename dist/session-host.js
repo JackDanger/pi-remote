@@ -97,17 +97,12 @@ export class SessionHost {
     attach(sessionId, client) {
         const entry = this.mustGetLive(sessionId);
         entry.clients.add(client);
-        const compactionState = entry.session.compactionState;
         return {
             summary: this.summarizeLive(entry),
             messages: entry.session.messages,
             model: toModelSnapshot(entry.session.model),
             thinkingLevel: entry.session.thinkingLevel,
-            ...(compactionState ? { compactionState } : {}),
         };
-    }
-    listCommands(sessionId) {
-        return this.deps.listCommands(this.mustGetLive(sessionId).session);
     }
     detach(sessionId, client) {
         this.live.get(sessionId)?.clients.delete(client);
@@ -135,13 +130,6 @@ export class SessionHost {
             : entry.session.prompt(text, images?.length ? { images } : undefined);
         run.catch((error) => this.broadcastError(sessionId, error));
     }
-    command(sessionId, text) {
-        this.rejectNewWorkWhileDraining();
-        const entry = this.mustGetLive(sessionId);
-        this.observer?.promptSent(sessionId, "command", formatModel(entry.session.model));
-        const options = entry.session.isStreaming ? { streamingBehavior: "steer" } : undefined;
-        entry.session.prompt(text, options).catch((error) => this.broadcastError(sessionId, error));
-    }
     steer(sessionId, text, images) {
         this.rejectNewWorkWhileDraining();
         const entry = this.mustGetLive(sessionId);
@@ -160,19 +148,10 @@ export class SessionHost {
     compact(sessionId, instructions) {
         this.rejectNewWorkWhileDraining();
         const entry = this.mustGetLive(sessionId);
-        entry.compactionAbortRequested = false;
-        entry.session.compact(instructions).catch((error) => {
-            if (entry.compactionAbortRequested) {
-                entry.compactionAbortRequested = false;
-                return;
-            }
-            this.broadcastError(sessionId, error);
-        });
+        entry.session.compact(instructions).catch((error) => this.broadcastError(sessionId, error));
     }
     abortCompaction(sessionId) {
-        const entry = this.mustGetLive(sessionId);
-        entry.compactionAbortRequested = true;
-        entry.session.abortCompaction();
+        this.mustGetLive(sessionId).session.abortCompaction();
     }
     async setModel(sessionId, provider, modelId) {
         const entry = this.mustGetLive(sessionId);
@@ -211,7 +190,6 @@ export class SessionHost {
             workspace,
             clients: new Set(),
             unsubscribe: () => { },
-            compactionAbortRequested: false,
         };
         entry.unsubscribe = session.subscribe((event) => {
             this.observer?.sessionEvent(session.sessionId, event);

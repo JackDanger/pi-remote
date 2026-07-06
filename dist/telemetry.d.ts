@@ -1,5 +1,5 @@
 import type { TelemetrySnapshot } from "./protocol.js";
-export type PromptKind = "prompt" | "steer" | "followup" | "command";
+export type PromptKind = "prompt" | "steer" | "followup";
 export interface SessionObserver {
     promptSent(sessionId: string, kind: PromptKind, model: string): void;
     modelSwitched(sessionId: string, from: string, to: string): void;

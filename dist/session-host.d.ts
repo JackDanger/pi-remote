@@ -10,23 +10,6 @@ export interface ImageContent {
     data: string;
     mimeType: string;
 }
-export interface CompactionStateSnapshot {
-    reason: "manual" | "threshold" | "overflow";
-    startedAt: number;
-    tokensSoFar: number;
-    elapsedMs: number;
-}
-export type CommandSource = "builtin" | "extension" | "prompt" | "skill";
-export interface CommandInfo {
-    name: string;
-    description?: string;
-    source: CommandSource;
-    argHint?: string;
-}
-export interface PromptOptions {
-    images?: ImageContent[];
-    streamingBehavior?: "steer" | "followUp";
-}
 export interface HostableSession {
     sessionId: string;
     sessionFile: string | undefined;
@@ -38,10 +21,11 @@ export interface HostableSession {
     } | undefined;
     thinkingLevel: string;
     isStreaming: boolean;
-    readonly compactionState?: CompactionStateSnapshot | undefined;
     messages: unknown[];
     subscribe(listener: (event: unknown) => void): () => void;
-    prompt(text: string, options?: PromptOptions): Promise<void>;
+    prompt(text: string, options?: {
+        images?: ImageContent[];
+    }): Promise<void>;
     steer(text: string, images?: ImageContent[]): Promise<void>;
     followUp(text: string, images?: ImageContent[]): Promise<void>;
     abort(): Promise<void>;
@@ -75,7 +59,6 @@ export interface SessionHostDeps {
     listPersisted: () => Promise<PersistedSessionInfo[]>;
     deletePersisted: (path: string) => Promise<void>;
     setSessionModel: (session: HostableSession, provider: string, modelId: string) => Promise<void>;
-    listCommands: (session: HostableSession) => CommandInfo[];
 }
 export interface AttachedClient {
     send(payload: unknown): void;
@@ -96,7 +79,6 @@ export interface AttachState {
     messages: unknown[];
     model?: ModelSnapshot;
     thinkingLevel: string;
-    compactionState?: CompactionStateSnapshot;
 }
 export declare class SessionNotFoundError extends Error {
     constructor(sessionId: string);
@@ -122,12 +104,10 @@ export declare class SessionHost {
     listSessions(): Promise<SessionSummary[]>;
     deleteSession(path: string): Promise<void>;
     attach(sessionId: string, client: AttachedClient): AttachState;
-    listCommands(sessionId: string): CommandInfo[];
     detach(sessionId: string, client: AttachedClient): void;
     detachEverywhere(client: AttachedClient): void;
     pushToAttached(sessionId: string, payload: unknown): void;
     prompt(sessionId: string, text: string, images?: ImageContent[]): void;
-    command(sessionId: string, text: string): void;
     steer(sessionId: string, text: string, images?: ImageContent[]): void;
     followUp(sessionId: string, text: string, images?: ImageContent[]): void;
     abort(sessionId: string): Promise<void>;

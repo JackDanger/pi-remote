@@ -830,6 +830,23 @@ function addCopyButtons(node: HTMLElement): void {
     };
     block.appendChild(btn);
   }
+  // Add copy button to user messages
+  for (const msg of node.querySelectorAll(".msg.user")) {
+    const text = msg.textContent?.trim() ?? "";
+    if (!text) continue;
+    const btn = el(`<button class="copy-btn" aria-label="Copy message">copy</button>`) as HTMLButtonElement;
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      await navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          btn.textContent = "copied";
+          setTimeout(() => (btn.textContent = "copy"), 1500);
+        })
+        .catch(() => toast("Copy failed"));
+    };
+    msg.appendChild(btn);
+  }
 }
 
 function buildMessageNode(message: ChatMessage, index: number): HTMLElement | undefined {

@@ -86,9 +86,6 @@ async function dispatch(request, options, client, sessionsChanged) {
         case "session.followup":
             sessionHost.followUp(request.sessionId, request.text, toImageContents(request.images));
             return {};
-        case "session.command":
-            sessionHost.command(request.sessionId, request.text);
-            return {};
         case "session.abort":
             await sessionHost.abort(request.sessionId);
             return {};
@@ -107,8 +104,6 @@ async function dispatch(request, options, client, sessionsChanged) {
             sessionsChanged();
             return { name };
         }
-        case "commands.list":
-            return { commands: sessionHost.listCommands(request.sessionId) };
         case "models.list":
             return { models: options.listModels() };
         case "ping":

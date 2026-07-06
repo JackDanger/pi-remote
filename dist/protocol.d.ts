@@ -46,11 +46,6 @@ export type ClientRequest = {
     images?: ImageAttachment[];
 } | {
     id: number;
-    type: "session.command";
-    sessionId: string;
-    text: string;
-} | {
-    id: number;
     type: "session.abort";
     sessionId: string;
 } | {
@@ -78,10 +73,6 @@ export type ClientRequest = {
     type: "session.rename";
     sessionId: string;
     name: string;
-} | {
-    id: number;
-    type: "commands.list";
-    sessionId: string;
 } | {
     id: number;
     type: "models.list";
