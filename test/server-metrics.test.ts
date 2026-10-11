@@ -31,6 +31,8 @@ class FakeSession implements HostableSession {
   async steer(): Promise<void> {}
   async followUp(): Promise<void> {}
   async abort(): Promise<void> {}
+  async compact(): Promise<void> {}
+  abortCompaction(): void {}
   setThinkingLevel(): void {}
   setSessionName(): void {}
   dispose(): void {}
@@ -136,6 +138,7 @@ describe("GET /metrics", () => {
       listModels: () => [],
       workspaceRoot: "/ws",
       webRoot: fs.mkdtempSync(path.join(os.tmpdir(), "pi-remote-test-")),
+      allowedOrigins: ["https://bixby"],
       renderMetrics: renderMetrics ?? (() => telemetry.renderMetrics()),
     });
     servers.push(server);
@@ -180,6 +183,7 @@ describe("session.attach telemetry merge", () => {
       listModels: () => [],
       workspaceRoot: "/ws",
       webRoot: fs.mkdtempSync(path.join(os.tmpdir(), "pi-remote-test-")),
+      allowedOrigins: ["https://bixby"],
       latestTelemetry: (sessionId) => telemetry.snapshot(sessionId),
     });
     servers.push(server);
@@ -201,7 +205,7 @@ describe("session.attach telemetry merge", () => {
     });
     fake.emit({ type: "agent_end" });
 
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/ws`, { origin: "https://bixby" });
     await new Promise((resolve) => socket.on("open", resolve));
     const reply = await new Promise<Record<string, unknown>>((resolve) => {
       socket.on("message", (data) => resolve(JSON.parse(String(data)) as Record<string, unknown>));

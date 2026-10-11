@@ -70,6 +70,7 @@ describe("static file cache headers", () => {
       listModels: () => [],
       workspaceRoot: "/ws",
       webRoot,
+      allowedOrigins: ["https://bixby"],
     });
     servers.push(server);
     await new Promise((resolve) => server.on("listening", resolve));

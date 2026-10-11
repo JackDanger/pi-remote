@@ -16,8 +16,10 @@ export interface Config {
   shutdownGraceMs: number;
   telemetry: boolean;
   httpIdleTimeoutMs: number;
+  allowedOrigins: string[];
 }
 
+export const DEFAULT_ALLOWED_ORIGINS: readonly string[] = ["https://bixby"];
 export const DEFAULT_SHUTDOWN_GRACE_MS = 120_000;
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 1_800_000;
 
@@ -44,6 +46,7 @@ interface ConfigFile {
   shutdownGraceMs?: number;
   telemetry?: boolean;
   httpIdleTimeoutMs?: number | string;
+  allowedOrigins?: string | string[];
 }
 
 function readConfigFile(filePath: string): ConfigFile {
@@ -78,6 +81,30 @@ export function parseHttpIdleTimeoutMs(value: string | number, source: string): 
     throw new Error(`Invalid HTTP idle timeout "${value}" from ${source} (expected non-negative milliseconds or "disabled")`);
   }
   return Math.floor(ms);
+}
+
+export function parseAllowedOrigins(value: string | string[], source: string): string[] {
+  const entries = (Array.isArray(value) ? value : value.split(","))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+  if (entries.length === 0) {
+    throw new Error(`No allowed origins in ${source} (expected comma-separated origins like "https://bixby")`);
+  }
+  return [...new Set(entries.map((entry) => normalizeOrigin(entry, source)))];
+}
+
+function normalizeOrigin(entry: string, source: string): string {
+  let url: URL;
+  try {
+    url = new URL(entry);
+  } catch {
+    throw new Error(`Invalid origin "${entry}" from ${source} (expected scheme://host[:port])`);
+  }
+  const isBareOrigin = (url.pathname === "/" || url.pathname === "") && url.search === "" && url.hash === "";
+  if (url.origin === "null" || !isBareOrigin || url.username !== "" || url.password !== "") {
+    throw new Error(`Invalid origin "${entry}" from ${source} (expected scheme://host[:port])`);
+  }
+  return url.origin;
 }
 
 function parseBoolean(value: string, source: string): boolean {
@@ -117,6 +144,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : file.httpIdleTimeoutMs !== undefined
       ? parseHttpIdleTimeoutMs(file.httpIdleTimeoutMs, "config file")
       : DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+  const allowedOrigins = env.PI_REMOTE_ALLOWED_ORIGINS
+    ? parseAllowedOrigins(env.PI_REMOTE_ALLOWED_ORIGINS, "PI_REMOTE_ALLOWED_ORIGINS")
+    : file.allowedOrigins !== undefined
+      ? parseAllowedOrigins(file.allowedOrigins, "config file")
+      : [...DEFAULT_ALLOWED_ORIGINS];
   return {
     host,
     port,
@@ -126,5 +158,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     shutdownGraceMs,
     telemetry,
     httpIdleTimeoutMs,
+    allowedOrigins,
   };
 }

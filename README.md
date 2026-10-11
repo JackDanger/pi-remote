@@ -37,6 +37,14 @@ authentication (mTLS, OAuth proxy, basic auth, VPN, tailnet — your choice).
 **Never bind it to a public interface without an authenticating proxy in front.**
 `PI_REMOTE_HOST=0.0.0.0` on an open network is a public unauthenticated remote shell.
 
+**WebSocket upgrades are refused (HTTP 403) unless their `Origin` is on the allowlist**
+(`PI_REMOTE_ALLOWED_ORIGINS`, default `https://bixby`). Browsers attach ambient
+credentials — client certificates, cookies, basic auth — to cross-site WebSocket
+connections, so without this check any page the user visits could open a session
+through the authenticating proxy. Set it to the exact origin your browser loads
+pi-remote from. Upgrades without an `Origin` header are refused too; non-browser
+clients must send one.
+
 ## Quickstart
 
 Requires Node 20+ and a working `pi` setup (any provider Pi supports — the sessions
@@ -47,7 +55,7 @@ git clone https://github.com/JackDanger/pi-remote.git
 cd pi-remote
 npm install
 npm run build
-npm start
+PI_REMOTE_ALLOWED_ORIGINS=http://127.0.0.1:3141 npm start
 ```
 
 Open http://127.0.0.1:3141 — create a session, say hello, watch the agent run tools.
@@ -57,6 +65,7 @@ quick personal setup on a tailnet:
 
 ```bash
 tailscale serve 3141
+PI_REMOTE_ALLOWED_ORIGINS=https://<machine>.<tailnet>.ts.net npm start
 ```
 
 ## What works inside a hosted session
@@ -110,6 +119,7 @@ Environment variables override the config file
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings default, else first available | `provider/model-id` for new sessions |
 | `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | on SIGTERM/SIGINT, how long to wait for in-flight agent turns to finish before force-stopping them |
 | `PI_REMOTE_TELEMETRY` | `telemetry` | `true` | Prometheus `/metrics` endpoint + structured per-turn JSON logs (see Observability) |
+| `PI_REMOTE_ALLOWED_ORIGINS` | `allowedOrigins` | `https://bixby` | comma-separated (file: array) `scheme://host[:port]` origins allowed to open the `/ws` WebSocket; any other or missing `Origin` gets HTTP 403 (see SECURITY) |
 | `PI_REMOTE_HTTP_IDLE_TIMEOUT_MS` | `httpIdleTimeoutMs` | `1800000` | max time a model HTTP request may go without receiving any bytes before it is aborted (covers time-to-first-token, so it must exceed the slowest model's prefill; Pi's own default is 5 minutes, which kills large local models that take 5–18 min to first token). `0` or `"disabled"` disables the timeout entirely; the finite default means a genuinely wedged upstream still errors out instead of hanging a session forever |
 
 Example `config.json`:
@@ -118,7 +128,8 @@ Example `config.json`:
 {
   "port": 3141,
   "workspaceRoot": "~/code",
-  "defaultModel": "anthropic/claude-sonnet-4-5"
+  "defaultModel": "anthropic/claude-sonnet-4-5",
+  "allowedOrigins": ["https://pi.example.com"]
 }
 ```
 

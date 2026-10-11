@@ -241,6 +241,15 @@ proxy, VPN…), with pi-remote bound to `127.0.0.1`. Binding to a public interfa
 without a proxy is equivalent to a public unauthenticated root-ish shell. The README
 carries the loud version of this warning; the default bind address enforces it.
 
+The proxy's authentication is ambient: a browser presents the client certificate (or
+cookie, or basic-auth credential) on any WebSocket upgrade, including one a foreign
+page initiates. So the server itself checks `Origin` against `allowedOrigins` in
+`verifyClient` and answers 403 before upgrading, rather than trusting every proxy
+configuration to do it. A missing `Origin` is refused as well: every browser sends
+one on an upgrade, and the only clients that omit it are scripts, which can set it.
+The allowlist is exact-match on serialized origins with no wildcard, because a
+same-host comparison against `Host` would accept a DNS-rebinding attacker's origin.
+
 Workspace creation is constrained to a configurable `workspaceRoot` to keep session
 cwds organized; this is an organizational guard, not a security boundary (the agent's
 bash tool is not chrooted).
@@ -259,6 +268,7 @@ Precedence: env > config file > defaults. Config file: `~/.config/pi-remote/conf
 | `PI_REMOTE_DEFAULT_MODEL` | `defaultModel` | Pi settings → first available | `provider/model-id` for new sessions |
 | `PI_REMOTE_SHUTDOWN_GRACE_MS` | `shutdownGraceMs` | `120000` | drain deadline: how long SIGTERM waits for running turns before force-stopping |
 | `PI_REMOTE_TELEMETRY` | `telemetry` | `true` | `/metrics` endpoint + structured per-turn JSON logs |
+| `PI_REMOTE_ALLOWED_ORIGINS` | `allowedOrigins` | `https://bixby` | origins allowed to open `/ws`; anything else, or no `Origin`, is refused with 403 before the upgrade |
 
 Provider credentials are Pi's problem, deliberately: `auth.json`, env vars
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …), `models.json`, or provider-registering
