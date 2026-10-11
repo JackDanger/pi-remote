@@ -18,6 +18,7 @@ export interface ServerOptions {
   listModels: () => ModelSnapshot[];
   workspaceRoot: string;
   webRoot: string;
+  allowedOrigins: readonly string[];
   renderMetrics?: () => string;
   latestTelemetry?: (sessionId: string) => TelemetrySnapshot | undefined;
 }
@@ -164,7 +165,19 @@ export function startServer(options: ServerOptions): http.Server {
     serveStatic(options.webRoot, req, res);
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const allowedOrigins = new Set(options.allowedOrigins);
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: "/ws",
+    verifyClient: ({ origin }, accept) => {
+      if (allowedOrigins.has(origin)) {
+        accept(true);
+        return;
+      }
+      console.warn(`refused WebSocket upgrade from origin ${JSON.stringify(origin ?? null)}`);
+      accept(false, 403, "Forbidden origin");
+    },
+  });
 
   const broadcastSessionsChanged = (): void => {
     for (const socket of wss.clients) {

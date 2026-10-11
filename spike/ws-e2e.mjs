@@ -1,10 +1,11 @@
 import WebSocket from "ws";
 
 const url = process.argv[2] ?? "ws://127.0.0.1:3441/ws";
+const origin = process.argv[3] ?? new URL(url).origin.replace(/^ws/, "http");
 
 function connect() {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, { origin });
     let nextId = 1;
     const pending = new Map();
     const pushes = [];

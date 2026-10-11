@@ -36,6 +36,7 @@ const server = startServer({
   listModels: environment.listModels,
   workspaceRoot: environment.workspaceRoot,
   webRoot,
+  allowedOrigins: config.allowedOrigins,
   renderMetrics: telemetry ? () => telemetry.renderMetrics() : undefined,
   latestTelemetry: telemetry ? (sessionId) => telemetry.snapshot(sessionId) : undefined,
 });

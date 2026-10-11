@@ -9,6 +9,7 @@ Before any scripted `session.*` verification, point the server at a throwaway st
 
     PI_REMOTE_AGENT_DIR="$(mktemp -d)/agent" \
     PI_REMOTE_WORKSPACE_ROOT="$(mktemp -d)/ws" \
+    PI_REMOTE_PORT=3441 PI_REMOTE_ALLOWED_ORIGINS=http://127.0.0.1:3441 \
     node dist/main.js   # or the WS probe's own instance
 
 Never target the production `pi-remote@bixby` instance (it hosts live human sessions)

@@ -5,7 +5,9 @@ pi-remote binds to localhost and does no auth or TLS. The proxy in front of it m
 1. terminate TLS
 2. authenticate every request (mTLS client certs, OAuth proxy, basic auth, or a
    private network)
-3. forward WebSocket upgrades on `/ws`
+3. forward WebSocket upgrades on `/ws`, passing the browser's `Origin` header through
+   unchanged — set `PI_REMOTE_ALLOWED_ORIGINS` to the origin users load the UI from
+   (e.g. `https://pi.example.com`), or pi-remote refuses the upgrade with 403
 4. allow long-lived connections (agent runs can stream for many minutes)
 
 ## Nginx Proxy Manager
